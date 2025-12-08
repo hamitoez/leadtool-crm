@@ -6,9 +6,8 @@ generator client {
 }
 
 datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
-  directUrl = env("DIRECT_URL")
+  provider = "mysql"
+  url      = env("DATABASE_URL")
 }
 
 // ============================================
@@ -26,11 +25,40 @@ model User {
   projects Project[]
   accounts Account[]
   sessions Session[]
+  settings UserSettings?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@map("users")
+}
+
+// ============================================
+// USER SETTINGS (API Keys, Preferences)
+// ============================================
+
+model UserSettings {
+  id     String @id @default(cuid())
+  userId String @unique
+
+  // AI Provider Settings
+  aiProvider   String? // anthropic, openai, google, mistral, groq, deepseek
+  aiApiKey     String? // Encrypted API key
+  aiModel      String? // Specific model to use
+
+  // General Preferences
+  language     String  @default("de")
+  theme        String  @default("system")
+
+  // Feature Flags
+  enableAiFeatures Boolean @default(true)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("user_settings")
 }
 
 model Account {
@@ -211,8 +239,8 @@ model Cell {
   rowId    String
   columnId String
 
-  // Flexible value as JSONB (Text, Array, Object)
-  value Json @default("null")
+  // Flexible value as JSON (Text, Array, Object)
+  value Json?
 
   // Additional metadata (Source, Confidence, Timestamps)
   metadata Json @default("{}")
