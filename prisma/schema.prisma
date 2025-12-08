@@ -1,0 +1,375 @@
+// LeadTool CRM - Prisma Schema
+// Notion-like CRM with automated contact data extraction
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ============================================
+// USER & AUTH (NextAuth.js compatible)
+// ============================================
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String?
+  emailVerified DateTime?
+  image         String?
+  password      String?   // For credentials provider
+
+  projects Project[]
+  accounts Account[]
+  sessions Session[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("users")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+// ============================================
+// PROJECTS & TABLES (Notion-like structure)
+// ============================================
+
+model Project {
+  id          String  @id @default(cuid())
+  userId      String
+  name        String
+  description String?
+  settings    Json    @default("{}")
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tables Table[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@map("projects")
+}
+
+model Table {
+  id          String  @id @default(cuid())
+  projectId   String
+  name        String
+  description String?
+  settings    Json    @default("{}")
+
+  project Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  columns Column[]
+  rows    Row[]
+  views   TableView[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([projectId])
+  @@map("tables")
+}
+
+// ============================================
+// TABLE VIEWS (Saved Filters & Configurations)
+// ============================================
+
+model TableView {
+  id        String  @id @default(cuid())
+  tableId   String
+  name      String
+  isDefault Boolean @default(false)
+
+  // View configuration
+  filters          Json @default("[]")    // Array of filter conditions
+  sorting          Json @default("[]")    // Array of sort configurations
+  columnVisibility Json @default("{}")    // Column ID -> boolean visibility
+  columnOrder      Json @default("[]")    // Array of column IDs in order
+  globalFilter     String @default("")    // Global search filter
+
+  table Table @relation(fields: [tableId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tableId])
+  @@map("table_views")
+}
+
+// ============================================
+// COLUMNS (Dynamic Schema)
+// ============================================
+
+enum ColumnType {
+  TEXT
+  URL
+  EMAIL
+  PHONE
+  NUMBER
+  DATE
+  SELECT
+  MULTI_SELECT
+  PERSON
+  COMPANY
+  ADDRESS
+  CONFIDENCE
+  STATUS
+  AI_GENERATED
+}
+
+model Column {
+  id        String     @id @default(cuid())
+  tableId   String
+  name      String
+  type      ColumnType
+  position  Int
+  width     Int        @default(200)
+  isVisible Boolean    @default(true)
+  isPinned  Boolean    @default(false)
+
+  // Type-specific config (options for SELECT, validation, etc.)
+  config Json @default("{}")
+
+  // AI-Config (for AI_GENERATED columns)
+  aiConfig Json?
+
+  table Table  @relation(fields: [tableId], references: [id], onDelete: Cascade)
+  cells Cell[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tableId])
+  @@map("columns")
+}
+
+// ============================================
+// ROWS & CELLS
+// ============================================
+
+model Row {
+  id       String @id @default(cuid())
+  tableId  String
+  position Int
+
+  table      Table       @relation(fields: [tableId], references: [id], onDelete: Cascade)
+  cells      Cell[]
+  extraction Extraction?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tableId])
+  @@index([tableId, position])
+  @@map("rows")
+}
+
+model Cell {
+  id       String @id @default(cuid())
+  rowId    String
+  columnId String
+
+  // Flexible value as JSONB (Text, Array, Object)
+  value Json @default("null")
+
+  // Additional metadata (Source, Confidence, Timestamps)
+  metadata Json @default("{}")
+
+  row    Row    @relation(fields: [rowId], references: [id], onDelete: Cascade)
+  column Column @relation(fields: [columnId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([rowId, columnId])
+  @@index([rowId])
+  @@index([columnId])
+  @@map("cells")
+}
+
+// ============================================
+// EXTRACTION & SCRAPING
+// ============================================
+
+enum ExtractionStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  PARTIAL
+}
+
+model Extraction {
+  id    String @id @default(cuid())
+  rowId String @unique
+
+  // Source URL
+  url           String
+  normalizedUrl String
+
+  // Status tracking
+  status   ExtractionStatus @default(PENDING)
+  progress Int              @default(0)
+  error    String?
+
+  // Aggregated results
+  rawData    Json  @default("{}")
+  confidence Float @default(0)
+
+  // Processing metadata
+  startedAt      DateTime?
+  completedAt    DateTime?
+  processingTime Int? // in ms
+
+  row          Row               @relation(fields: [rowId], references: [id], onDelete: Cascade)
+  scrapedPages ScrapedPage[]
+  entities     ExtractedEntity[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@index([normalizedUrl])
+  @@map("extractions")
+}
+
+model ScrapedPage {
+  id           String @id @default(cuid())
+  extractionId String
+
+  url      String
+  pageType String // impressum, kontakt, team, etc.
+
+  // Content
+  html        String? @db.Text
+  textContent String? @db.Text
+
+  // Metadata
+  statusCode  Int?
+  contentType String?
+  fetchTime   Int? // in ms
+  usedBrowser Boolean @default(false)
+
+  extraction Extraction @relation(fields: [extractionId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([extractionId])
+  @@map("scraped_pages")
+}
+
+enum EntityType {
+  EMAIL
+  PHONE
+  PERSON
+  ADDRESS
+  COMPANY_NAME
+  TRADE_REGISTER
+  VAT_ID
+}
+
+model ExtractedEntity {
+  id           String @id @default(cuid())
+  extractionId String
+
+  entityType EntityType
+  value      String
+
+  // Detailed data as JSON
+  data Json @default("{}")
+
+  // Quality metrics
+  confidence Float
+  source     String // page_type or "llm"
+  method     String // "regex", "ner", "llm", "rule"
+
+  // Flags
+  isFallback Boolean @default(false)
+  isVerified Boolean @default(false)
+
+  extraction Extraction @relation(fields: [extractionId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([extractionId])
+  @@index([entityType])
+  @@map("extracted_entities")
+}
+
+// ============================================
+// JOB QUEUE (for monitoring)
+// ============================================
+
+enum JobStatus {
+  PENDING
+  ACTIVE
+  COMPLETED
+  FAILED
+  STALLED
+}
+
+model ProcessingJob {
+  id        String @id @default(cuid())
+  queueName String
+  jobId     String @unique
+
+  // Job data
+  data     Json
+  status   JobStatus @default(PENDING)
+  progress Int       @default(0)
+
+  // Results
+  result Json?
+  error  String?
+
+  // Timing
+  createdAt   DateTime  @default(now())
+  startedAt   DateTime?
+  completedAt DateTime?
+
+  @@index([status])
+  @@index([queueName])
+  @@map("processing_jobs")
+}

@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(timeout /t 3 /nobreak)",
+      "Bash(cmd /c \"taskkill /F /IM node.exe 2>nul & del /f /q C:\\Users\\Abdulhamit\\Desktop\\CRM-main\\CRM-main\\.next\\dev\\lock 2>nul & echo Done\")",
+      "Bash(del /f /q \"C:\\Users\\Abdulhamit\\Desktop\\CRM-main\\CRM-main\\.next\\dev\\lock\")",
+      "Bash(netstat:*)",
+      "Bash(npm run dev:*)",
+      "Bash(npm install:*)",
+      "Bash(tasklist /FI \"IMAGENAME eq node.exe\")",
+      "Bash(findstr:*)",
+      "Bash(dir:*)",
+      "Bash(timeout /t 8 /nobreak)",
+      "Bash(cmd /c \"netstat -ano | findstr :3000\")",
+      "Bash(npm run build:*)",
+      "Bash(npx next build)",
+      "Bash(git init:*)",
+      "Bash(git add:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
