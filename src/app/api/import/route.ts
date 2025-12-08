@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import Papa from "papaparse";
-import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 import { auth } from "@/lib/auth";
 import { CSVParseResult } from "@/types/import";
 
@@ -29,38 +29,39 @@ function isCsvFile(filename: string): boolean {
  */
 async function parseExcelFile(file: File): Promise<{ headers: string[]; rows: string[][] }> {
   const arrayBuffer = await file.arrayBuffer();
-  const workbook = XLSX.read(arrayBuffer, { type: "array" });
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(arrayBuffer);
 
   // Get first sheet
-  const firstSheetName = workbook.SheetNames[0];
-  if (!firstSheetName) {
+  const worksheet = workbook.worksheets[0];
+  if (!worksheet) {
     throw new Error("Excel-Datei enthält keine Arbeitsblätter");
   }
 
-  const worksheet = workbook.Sheets[firstSheetName];
+  const headers: string[] = [];
+  const rows: string[][] = [];
 
-  // Convert to JSON with header option
-  const jsonData = XLSX.utils.sheet_to_json<string[]>(worksheet, {
-    header: 1, // Return array of arrays
-    defval: "", // Default value for empty cells
-    blankrows: false, // Skip blank rows
+  worksheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+    const rowValues: string[] = [];
+    row.eachCell({ includeEmpty: true }, (cell) => {
+      const value = cell.value;
+      rowValues.push(value !== null && value !== undefined ? String(value).trim() : "");
+    });
+
+    if (rowNumber === 1) {
+      headers.push(...rowValues);
+    } else {
+      // Pad row to match header length
+      while (rowValues.length < headers.length) {
+        rowValues.push("");
+      }
+      rows.push(rowValues);
+    }
   });
 
-  if (!jsonData || jsonData.length === 0) {
+  if (headers.length === 0) {
     throw new Error("Excel-Datei enthält keine Daten");
   }
-
-  // First row is headers
-  const headers = (jsonData[0] as string[]).map((h) =>
-    h !== null && h !== undefined ? String(h).trim() : ""
-  );
-
-  // Rest are data rows
-  const rows = jsonData.slice(1).map((row) =>
-    (row as string[]).map((cell) =>
-      cell !== null && cell !== undefined ? String(cell).trim() : ""
-    )
-  );
 
   return { headers, rows };
 }

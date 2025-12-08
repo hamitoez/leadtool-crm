@@ -43,6 +43,7 @@
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
     "date-fns": "^4.1.0",
+    "exceljs": "^4.4.0",
     "lucide-react": "^0.556.0",
     "next": "16.0.7",
     "next-auth": "^5.0.0-beta.30",
@@ -57,7 +58,6 @@
     "react-hook-form": "^7.68.0",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.4.0",
-    "xlsx": "^0.18.5",
     "zod": "^4.1.13"
   },
   "devDependencies": {
