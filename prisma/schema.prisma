@@ -6,8 +6,9 @@ generator client {
 }
 
 datasource db {
-  provider = "mysql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 // ============================================
@@ -239,8 +240,8 @@ model Cell {
   rowId    String
   columnId String
 
-  // Flexible value as JSON (Text, Array, Object)
-  value Json?
+  // Flexible value as JSONB (Text, Array, Object)
+  value Json @default("null")
 
   // Additional metadata (Source, Confidence, Timestamps)
   metadata Json @default("{}")
