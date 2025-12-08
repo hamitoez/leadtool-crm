@@ -15,6 +15,13 @@ const passwordUpdateSchema = z.object({
   newPassword: z.string().min(8),
 });
 
+// Validation schema for AI settings
+const aiSettingsSchema = z.object({
+  aiProvider: z.string().optional().nullable(),
+  aiApiKey: z.string().optional().nullable(),
+  aiModel: z.string().optional().nullable(),
+});
+
 // GET - Get user settings
 export async function GET() {
   try {
@@ -32,6 +39,16 @@ export async function GET() {
         email: true,
         image: true,
         createdAt: true,
+        settings: {
+          select: {
+            aiProvider: true,
+            aiModel: true,
+            aiApiKey: true,
+            language: true,
+            theme: true,
+            enableAiFeatures: true,
+          },
+        },
       },
     });
 
@@ -39,7 +56,21 @@ export async function GET() {
       return NextResponse.json({ error: "User not found" }, { status: 404 });
     }
 
-    return NextResponse.json({ user });
+    // Mask API key for security (only show last 4 chars)
+    const maskedSettings = user.settings ? {
+      ...user.settings,
+      aiApiKey: user.settings.aiApiKey
+        ? `${"•".repeat(20)}${user.settings.aiApiKey.slice(-4)}`
+        : null,
+      hasApiKey: !!user.settings.aiApiKey,
+    } : null;
+
+    return NextResponse.json({
+      user: {
+        ...user,
+        settings: maskedSettings,
+      }
+    });
   } catch (error) {
     console.error("Error fetching settings:", error);
     return NextResponse.json(
@@ -130,6 +161,60 @@ export async function PATCH(request: NextRequest) {
 
       return NextResponse.json({
         message: "Password updated successfully",
+      });
+    }
+
+    if (type === "ai-settings") {
+      const validation = aiSettingsSchema.safeParse(body);
+      if (!validation.success) {
+        return NextResponse.json(
+          { error: "Invalid request data", details: validation.error.issues },
+          { status: 400 }
+        );
+      }
+
+      // Upsert user settings
+      const settings = await prisma.userSettings.upsert({
+        where: { userId: session.user.id },
+        update: {
+          aiProvider: validation.data.aiProvider,
+          aiApiKey: validation.data.aiApiKey,
+          aiModel: validation.data.aiModel,
+        },
+        create: {
+          userId: session.user.id,
+          aiProvider: validation.data.aiProvider,
+          aiApiKey: validation.data.aiApiKey,
+          aiModel: validation.data.aiModel,
+        },
+      });
+
+      return NextResponse.json({
+        message: "AI settings updated successfully",
+        settings: {
+          aiProvider: settings.aiProvider,
+          aiModel: settings.aiModel,
+          hasApiKey: !!settings.aiApiKey,
+        },
+      });
+    }
+
+    if (type === "remove-ai") {
+      // Remove AI settings
+      await prisma.userSettings.upsert({
+        where: { userId: session.user.id },
+        update: {
+          aiProvider: null,
+          aiApiKey: null,
+          aiModel: null,
+        },
+        create: {
+          userId: session.user.id,
+        },
+      });
+
+      return NextResponse.json({
+        message: "AI settings removed successfully",
       });
     }
 

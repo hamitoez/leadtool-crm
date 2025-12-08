@@ -2,11 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { z } from "zod";
 import { generateText, AIProvider } from "@/lib/ai/providers";
+import { getUserAISettings } from "@/lib/user-settings";
 
 const requestSchema = z.object({
   prompt: z.string().min(1),
-  apiKey: z.string().min(1),
-  provider: z.enum(["anthropic", "openai", "google", "mistral", "groq", "deepseek"]).optional(),
   maxTokens: z.number().optional(),
 });
 
@@ -32,14 +31,31 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { prompt, apiKey, provider = "anthropic", maxTokens = 1000 } = validation.data;
+    const { prompt, maxTokens = 1000 } = validation.data;
 
-    const text = await generateText(prompt, apiKey, provider as AIProvider, maxTokens);
+    // Lade AI-Settings aus der Datenbank
+    const aiSettings = await getUserAISettings();
+    if (!aiSettings || !aiSettings.apiKey || !aiSettings.provider) {
+      return NextResponse.json(
+        {
+          error: "KI nicht konfiguriert",
+          message: "Bitte konfiguriere deinen API Key in den Einstellungen."
+        },
+        { status: 400 }
+      );
+    }
+
+    const text = await generateText(
+      prompt,
+      aiSettings.apiKey,
+      aiSettings.provider as AIProvider,
+      maxTokens
+    );
 
     return NextResponse.json({
       success: true,
       text,
-      provider,
+      provider: aiSettings.provider,
     });
   } catch (error) {
     console.error("AI generation error:", error);

@@ -9,6 +9,7 @@ import {
   AIProvider,
 } from "@/lib/ai/compliment-generator";
 import prisma from "@/lib/prisma";
+import { getUserAISettings } from "@/lib/user-settings";
 
 // Validation Schema für einzelne Anfrage
 const singleRequestSchema = z.object({
@@ -35,8 +36,6 @@ const singleRequestSchema = z.object({
   }).optional(),
   // Optional: Cell ID zum direkten Speichern
   cellId: z.string().optional(),
-  apiKey: z.string().optional(), // Client kann API Key mitschicken
-  provider: z.enum(["anthropic", "openai", "google", "mistral", "groq", "deepseek"]).optional(),
 });
 
 // Validation Schema für Bulk-Anfrage
@@ -66,8 +65,6 @@ const bulkRequestSchema = z.object({
     customInstructions: z.string().optional(),
     preset: z.enum(["webdesign", "restaurant", "localBusiness"]).optional(),
   }).optional(),
-  apiKey: z.string().optional(),
-  provider: z.enum(["anthropic", "openai", "google", "mistral", "groq", "deepseek"]).optional(),
 });
 
 /**
@@ -86,7 +83,7 @@ export async function POST(request: NextRequest) {
 
     // Prüfe ob es eine Bulk-Anfrage ist
     if (body.leads && Array.isArray(body.leads)) {
-      return handleBulkRequest(body, session.user.id);
+      return handleBulkRequest(body);
     }
 
     // Einzelne Anfrage
@@ -98,20 +95,22 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { leadData, options, cellId, apiKey: clientApiKey, provider: clientProvider } = validation.data;
+    const { leadData, options, cellId } = validation.data;
 
-    // Provider und API Key
-    const provider: AIProvider = clientProvider || "anthropic";
-    const apiKey = clientApiKey || process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
+    // Lade AI-Settings aus der Datenbank
+    const aiSettings = await getUserAISettings();
+    if (!aiSettings || !aiSettings.apiKey || !aiSettings.provider) {
       return NextResponse.json(
         {
-          error: "API Key nicht konfiguriert",
+          error: "KI nicht konfiguriert",
           message: "Bitte konfiguriere deinen API Key in den Einstellungen."
         },
         { status: 400 }
       );
     }
+
+    const provider: AIProvider = aiSettings.provider as AIProvider;
+    const apiKey = aiSettings.apiKey;
 
     // Optionen mit Preset mergen falls angegeben
     let mergedOptions: Partial<ComplimentOptions> = options || {};
@@ -163,7 +162,7 @@ export async function POST(request: NextRequest) {
 /**
  * Behandelt Bulk-Anfragen für mehrere Leads
  */
-async function handleBulkRequest(body: unknown, userId: string) {
+async function handleBulkRequest(body: unknown) {
   const validation = bulkRequestSchema.safeParse(body);
   if (!validation.success) {
     return NextResponse.json(
@@ -172,19 +171,22 @@ async function handleBulkRequest(body: unknown, userId: string) {
     );
   }
 
-  const { leads, options, apiKey: clientApiKey, provider: clientProvider } = validation.data;
+  const { leads, options } = validation.data;
 
-  const provider: AIProvider = clientProvider || "anthropic";
-  const apiKey = clientApiKey || process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
+  // Lade AI-Settings aus der Datenbank
+  const aiSettings = await getUserAISettings();
+  if (!aiSettings || !aiSettings.apiKey || !aiSettings.provider) {
     return NextResponse.json(
       {
-        error: "API Key nicht konfiguriert",
-        message: "Bitte konfiguriere deinen Anthropic API Key."
+        error: "KI nicht konfiguriert",
+        message: "Bitte konfiguriere deinen API Key in den Einstellungen."
       },
       { status: 400 }
     );
   }
+
+  const provider: AIProvider = aiSettings.provider as AIProvider;
+  const apiKey = aiSettings.apiKey;
 
   // Optionen mit Preset mergen
   let mergedOptions: Partial<ComplimentOptions> = options || {};

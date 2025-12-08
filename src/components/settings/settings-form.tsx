@@ -301,39 +301,49 @@ const AI_PROVIDERS: AIProvider[] = [
   },
 ];
 
-type ValidationStatus = "idle" | "validating" | "valid" | "invalid";
+type ValidationStatus = "idle" | "validating" | "valid" | "invalid" | "loading";
 
 interface SavedProvider {
   provider: string;
-  apiKey: string;
   model: string;
-  validatedAt: string;
+  hasApiKey: boolean;
 }
 
 export function ApiKeysForm() {
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
   const [apiKey, setApiKey] = useState("");
   const [isVisible, setIsVisible] = useState(false);
-  const [validationStatus, setValidationStatus] = useState<ValidationStatus>("idle");
+  const [validationStatus, setValidationStatus] = useState<ValidationStatus>("loading");
   const [validationError, setValidationError] = useState<string | null>(null);
   const [savedProvider, setSavedProvider] = useState<SavedProvider | null>(null);
 
-  // Load saved provider on mount
+  // Load saved provider from database on mount
   useEffect(() => {
-    if (typeof window === "undefined") return;
-
-    const saved = localStorage.getItem("ai_provider_config");
-    if (saved) {
+    const loadSettings = async () => {
       try {
-        const parsed = JSON.parse(saved) as SavedProvider;
-        setSavedProvider(parsed);
-        setSelectedProvider(parsed.provider);
-        setApiKey(parsed.apiKey);
-        setValidationStatus("valid");
+        const response = await fetch("/api/settings");
+        if (response.ok) {
+          const data = await response.json();
+          if (data.user?.settings?.aiProvider) {
+            const settings = data.user.settings;
+            setSavedProvider({
+              provider: settings.aiProvider,
+              model: settings.aiModel || "",
+              hasApiKey: settings.hasApiKey,
+            });
+            setSelectedProvider(settings.aiProvider);
+            setValidationStatus("valid");
+          } else {
+            setValidationStatus("idle");
+          }
+        } else {
+          setValidationStatus("idle");
+        }
       } catch {
-        // Invalid saved data, ignore
+        setValidationStatus("idle");
       }
-    }
+    };
+    loadSettings();
   }, []);
 
   const handleSelectProvider = (providerId: string) => {
@@ -343,8 +353,8 @@ export function ApiKeysForm() {
       setValidationStatus("idle");
       setValidationError(null);
     } else if (savedProvider && savedProvider.provider === providerId) {
-      // Same provider - restore key
-      setApiKey(savedProvider.apiKey);
+      // Same provider - keep valid status but clear key (it's in DB)
+      setApiKey("");
       setValidationStatus("valid");
     }
     setSelectedProvider(providerId);
@@ -360,7 +370,8 @@ export function ApiKeysForm() {
     setValidationError(null);
 
     try {
-      const response = await fetch("/api/settings/validate-api-key", {
+      // First validate the API key
+      const validateResponse = await fetch("/api/settings/validate-api-key", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -369,55 +380,70 @@ export function ApiKeysForm() {
         }),
       });
 
-      const result = await response.json();
+      const validateResult = await validateResponse.json();
 
-      if (result.valid) {
-        // Save to localStorage
-        const config: SavedProvider = {
-          provider: selectedProvider,
-          apiKey: apiKey.trim(),
-          model: result.model || AI_PROVIDERS.find(p => p.id === selectedProvider)?.model || "",
-          validatedAt: new Date().toISOString(),
-        };
-        localStorage.setItem("ai_provider_config", JSON.stringify(config));
+      if (validateResult.valid) {
+        // Save to database
+        const saveResponse = await fetch("/api/settings", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            type: "ai-settings",
+            aiProvider: selectedProvider,
+            aiApiKey: apiKey.trim(),
+            aiModel: validateResult.model || AI_PROVIDERS.find(p => p.id === selectedProvider)?.model || "",
+          }),
+        });
 
-        // Also save under legacy keys for compatibility
-        localStorage.setItem("ai_provider", selectedProvider);
-        localStorage.setItem("ai_api_key", apiKey.trim());
-        localStorage.setItem("default_ai_provider", selectedProvider);
+        if (saveResponse.ok) {
+          const config: SavedProvider = {
+            provider: selectedProvider,
+            model: validateResult.model || AI_PROVIDERS.find(p => p.id === selectedProvider)?.model || "",
+            hasApiKey: true,
+          };
 
-        setSavedProvider(config);
-        setValidationStatus("valid");
+          setSavedProvider(config);
+          setValidationStatus("valid");
+          setApiKey(""); // Clear the key from state after saving
 
-        const provider = AI_PROVIDERS.find(p => p.id === selectedProvider);
-        toast.success(`${provider?.name} erfolgreich verbunden!`);
+          const provider = AI_PROVIDERS.find(p => p.id === selectedProvider);
+          toast.success(`${provider?.name} erfolgreich verbunden!`);
+        } else {
+          throw new Error("Failed to save settings");
+        }
       } else {
         setValidationStatus("invalid");
-        setValidationError(result.error || "API Key ist ungültig");
-        toast.error(result.error || "API Key ist ungültig");
+        setValidationError(validateResult.error || "API Key ist ungültig");
+        toast.error(validateResult.error || "API Key ist ungültig");
       }
-    } catch (error) {
+    } catch {
       setValidationStatus("invalid");
       setValidationError("Verbindungsfehler - bitte versuche es erneut");
       toast.error("Verbindungsfehler");
     }
   };
 
-  const handleRemoveKey = () => {
+  const handleRemoveKey = async () => {
     if (!confirm("Möchtest du die KI-Verbindung trennen?")) return;
 
-    localStorage.removeItem("ai_provider_config");
-    localStorage.removeItem("ai_provider");
-    localStorage.removeItem("ai_api_key");
-    localStorage.removeItem("default_ai_provider");
+    try {
+      const response = await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "remove-ai" }),
+      });
 
-    setSavedProvider(null);
-    setSelectedProvider(null);
-    setApiKey("");
-    setValidationStatus("idle");
-    setValidationError(null);
-
-    toast.success("KI-Verbindung getrennt");
+      if (response.ok) {
+        setSavedProvider(null);
+        setSelectedProvider(null);
+        setApiKey("");
+        setValidationStatus("idle");
+        setValidationError(null);
+        toast.success("KI-Verbindung getrennt");
+      }
+    } catch {
+      toast.error("Fehler beim Trennen der Verbindung");
+    }
   };
 
   const currentProvider = AI_PROVIDERS.find(p => p.id === selectedProvider);
@@ -448,7 +474,7 @@ export function ApiKeysForm() {
                   Verbunden mit {AI_PROVIDERS.find(p => p.id === savedProvider.provider)?.name}
                 </p>
                 <p className="text-sm text-green-600 dark:text-green-400">
-                  Model: {savedProvider.model} • Validiert am {new Date(savedProvider.validatedAt).toLocaleDateString("de-DE")}
+                  Model: {savedProvider.model} • API Key gespeichert
                 </p>
               </div>
               <Button variant="ghost" size="sm" onClick={handleRemoveKey} className="text-red-600 hover:text-red-700 hover:bg-red-50">
@@ -646,8 +672,8 @@ export function ApiKeysForm() {
             <div className="space-y-1">
               <p className="text-sm font-medium">Wichtiger Hinweis</p>
               <p className="text-xs text-muted-foreground">
-                Der API Key wird lokal in deinem Browser gespeichert und <strong>erst nach erfolgreicher Validierung</strong> aktiviert.
-                Dein Key wird sicher übertragen und nur zum Testen einer minimalen Anfrage verwendet.
+                Der API Key wird in deinem Account gespeichert und <strong>erst nach erfolgreicher Validierung</strong> aktiviert.
+                Dein Key wird sicher in der Datenbank gespeichert und nur für KI-Funktionen verwendet.
               </p>
             </div>
           </div>
