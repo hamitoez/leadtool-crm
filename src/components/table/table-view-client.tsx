@@ -621,7 +621,7 @@ export function TableViewClient({
         enableVirtualization={false}
         enableColumnReordering={true}
         enableRowSelection={true}
-        pageSize={100}
+        pageSize={15}
         // AI Compliment Generator
         onGenerateCompliments={handleGenerateCompliments}
         // Web Scraper
