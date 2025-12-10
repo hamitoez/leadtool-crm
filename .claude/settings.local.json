@@ -67,7 +67,8 @@
       "Bash(iptables:*)",
       "Bash(pm2 delete:*)",
       "Bash(git pull:*)",
-      "Bash(git fetch:*)"
+      "Bash(git fetch:*)",
+      "Bash(python -m pytest:*)"
     ],
     "deny": [],
     "ask": []

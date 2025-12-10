@@ -42,13 +42,47 @@ class ContactInfo(BaseModel):
     @field_validator("phone", mode="before")
     @classmethod
     def normalize_phone(cls, v: Optional[str]) -> Optional[str]:
+        """
+        Normalize phone numbers to international format.
+
+        Handles:
+        - German (+49), Austrian (+43), Swiss (+41) formats
+        - Removes national zero after country code: +43 (0) 680 → +43680
+        - Converts 00xx to +xx format
+        - Adds +49 to German national numbers
+        """
         if v is None:
             return None
-        # Remove all non-digit characters except + at start
+
         v = v.strip()
+
+        # Step 1: Handle + prefix or 00 prefix
         if v.startswith("+"):
-            return "+" + re.sub(r"[^\d]", "", v[1:])
-        return re.sub(r"[^\d]", "", v)
+            cleaned = "+" + re.sub(r"[^\d]", "", v[1:])
+        elif v.startswith("00"):
+            # 0049 → +49, 0043 → +43, 0041 → +41
+            cleaned = "+" + re.sub(r"[^\d]", "", v[2:])
+        else:
+            cleaned = re.sub(r"[^\d]", "", v)
+
+        # Step 2: Remove national zero after country code
+        # +43 (0) 680 → +430680 → +43680
+        # +41 (0) 79 → +41079 → +4179
+        # +49 (0) 30 → +49030 → +4930
+        cleaned = re.sub(r"^\+49(0)(\d)", r"+49\2", cleaned)  # Deutschland
+        cleaned = re.sub(r"^\+43(0)(\d)", r"+43\2", cleaned)  # Österreich
+        cleaned = re.sub(r"^\+41(0)(\d)", r"+41\2", cleaned)  # Schweiz
+
+        # Step 3: Add German country code to national numbers
+        # 030 12345678 → +4930 12345678
+        if cleaned.startswith("0") and len(cleaned) >= 10:
+            cleaned = "+49" + cleaned[1:]
+
+        # Validation: Minimum length for valid phone
+        if len(cleaned) < 8:
+            return None
+
+        return cleaned
 
 
 class ScrapeResult(BaseModel):

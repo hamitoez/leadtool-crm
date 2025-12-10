@@ -65,6 +65,38 @@ Output:
 }
 
 ---
+BEISPIEL 4 (Unvollständige Daten - nur Kontaktseite ohne Namen):
+Input: "Kontakt\nSie haben Fragen? Schreiben Sie uns!\nE-Mail: hello@styleconcept.de\nTelefon: 0800 123 4567\nMo-Fr 9-17 Uhr"
+
+Output:
+{
+  "first_name": null,
+  "last_name": null,
+  "email": "hello@styleconcept.de",
+  "phone": "+498001234567",
+  "position": null,
+  "company": null,
+  "address": null,
+  "confidence": 0.4
+}
+
+---
+BEISPIEL 5 (Footer-Daten ohne formales Impressum):
+Input: "Footer\n© 2024 Design Studio Berlin\nKontakt: info@designstudio-berlin.de | +49 30 9876 5432\nSitz: Friedrichstraße 100, 10117 Berlin"
+
+Output:
+{
+  "first_name": null,
+  "last_name": null,
+  "email": "info@designstudio-berlin.de",
+  "phone": "+493098765432",
+  "position": null,
+  "company": "Design Studio Berlin",
+  "address": "Friedrichstraße 100, 10117 Berlin",
+  "confidence": 0.5
+}
+
+---
 
 AUSGABEFORMAT:
 Antworte NUR mit einem validen JSON-Objekt mit diesen Feldern:
