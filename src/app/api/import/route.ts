@@ -25,6 +25,75 @@ function isCsvFile(filename: string): boolean {
 }
 
 /**
+ * Convert Excel cell value to string
+ * ExcelJS returns complex objects for certain cell types (hyperlinks, rich text, etc.)
+ */
+function cellValueToString(value: ExcelJS.CellValue): string {
+  if (value === null || value === undefined) {
+    return "";
+  }
+
+  // Simple types
+  if (typeof value === "string") {
+    return value.trim();
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+
+  // Date objects
+  if (value instanceof Date) {
+    return value.toISOString().split("T")[0]; // YYYY-MM-DD format
+  }
+
+  // Complex types (objects)
+  if (typeof value === "object") {
+    // Hyperlink: { text: string, hyperlink: string }
+    if ("hyperlink" in value && value.hyperlink) {
+      // Return the hyperlink URL, or the text if no hyperlink
+      return String(value.hyperlink).trim();
+    }
+    if ("text" in value && value.text) {
+      return String(value.text).trim();
+    }
+
+    // Rich text: { richText: Array<{ text: string }> }
+    if ("richText" in value && Array.isArray(value.richText)) {
+      return value.richText
+        .map((rt: { text?: string }) => rt.text || "")
+        .join("")
+        .trim();
+    }
+
+    // Formula result: { result: value, formula: string }
+    if ("result" in value) {
+      return cellValueToString(value.result as ExcelJS.CellValue);
+    }
+
+    // Error value: { error: string }
+    if ("error" in value) {
+      return "";
+    }
+
+    // SharedString or other object - try to get string representation
+    if ("toString" in value && typeof value.toString === "function") {
+      const str = value.toString();
+      if (str !== "[object Object]") {
+        return str.trim();
+      }
+    }
+
+    // Last resort: try to find any text-like property
+    const obj = value as Record<string, unknown>;
+    if (obj.value !== undefined) {
+      return cellValueToString(obj.value as ExcelJS.CellValue);
+    }
+  }
+
+  return "";
+}
+
+/**
  * Parse Excel file (.xlsx or .xls)
  */
 async function parseExcelFile(file: File): Promise<{ headers: string[]; rows: string[][] }> {
@@ -40,23 +109,39 @@ async function parseExcelFile(file: File): Promise<{ headers: string[]; rows: st
 
   const headers: string[] = [];
   const rows: string[][] = [];
+  let maxColumns = 0;
 
+  // First pass: determine the number of columns from the header row
+  const headerRow = worksheet.getRow(1);
+  headerRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+    const value = cellValueToString(cell.value);
+    headers.push(value);
+    maxColumns = Math.max(maxColumns, colNumber);
+  });
+
+  // If headers are empty, try to detect columns from data
+  if (headers.length === 0 || headers.every(h => !h)) {
+    throw new Error("Excel-Datei enthält keine Spaltenüberschriften");
+  }
+
+  // Second pass: get all data rows
   worksheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
-    const rowValues: string[] = [];
-    row.eachCell({ includeEmpty: true }, (cell) => {
-      const value = cell.value;
-      rowValues.push(value !== null && value !== undefined ? String(value).trim() : "");
-    });
+    if (rowNumber === 1) return; // Skip header row
 
-    if (rowNumber === 1) {
-      headers.push(...rowValues);
-    } else {
-      // Pad row to match header length
-      while (rowValues.length < headers.length) {
-        rowValues.push("");
-      }
-      rows.push(rowValues);
+    const rowValues: string[] = [];
+
+    // Iterate through all columns up to maxColumns
+    for (let colIndex = 1; colIndex <= maxColumns; colIndex++) {
+      const cell = row.getCell(colIndex);
+      rowValues.push(cellValueToString(cell.value));
     }
+
+    // Pad row to match header length if needed
+    while (rowValues.length < headers.length) {
+      rowValues.push("");
+    }
+
+    rows.push(rowValues);
   });
 
   if (headers.length === 0) {

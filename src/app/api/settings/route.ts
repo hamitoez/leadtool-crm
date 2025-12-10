@@ -3,23 +3,29 @@ import { prisma } from "@/lib/prisma";
 import { auth } from "@/lib/auth";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
+import { encrypt, decrypt, maskApiKey } from "@/lib/security/encryption";
 
 // Validation schema for profile updates
 const profileUpdateSchema = z.object({
   name: z.string().min(1).max(100).optional(),
 });
 
-// Validation schema for password updates
+// Validation schema for password updates - stronger requirements
 const passwordUpdateSchema = z.object({
   currentPassword: z.string().min(1),
-  newPassword: z.string().min(8),
+  newPassword: z
+    .string()
+    .min(10, "Password must be at least 10 characters")
+    .regex(/[A-Z]/, "Password must contain at least one uppercase letter")
+    .regex(/[a-z]/, "Password must contain at least one lowercase letter")
+    .regex(/[0-9]/, "Password must contain at least one number"),
 });
 
 // Validation schema for AI settings
 const aiSettingsSchema = z.object({
-  aiProvider: z.string().optional().nullable(),
-  aiApiKey: z.string().optional().nullable(),
-  aiModel: z.string().optional().nullable(),
+  aiProvider: z.enum(["anthropic", "openai", "google", "mistral", "groq", "deepseek"]).optional().nullable(),
+  aiApiKey: z.string().min(10).max(200).optional().nullable(),
+  aiModel: z.string().max(100).optional().nullable(),
 });
 
 // GET - Get user settings
@@ -56,18 +62,36 @@ export async function GET() {
       return NextResponse.json({ error: "User not found" }, { status: 404 });
     }
 
-    // Mask API key for security (only show last 4 chars)
+    // Mask API key for security display
+    let maskedApiKey: string | null = null;
+    let hasApiKey = false;
+
+    if (user.settings?.aiApiKey) {
+      // Decrypt the API key first, then mask it
+      const decryptedKey = decrypt(user.settings.aiApiKey);
+      if (decryptedKey) {
+        hasApiKey = true;
+        maskedApiKey = maskApiKey(decryptedKey);
+      }
+    }
+
     const maskedSettings = user.settings ? {
-      ...user.settings,
-      aiApiKey: user.settings.aiApiKey
-        ? `${"•".repeat(20)}${user.settings.aiApiKey.slice(-4)}`
-        : null,
-      hasApiKey: !!user.settings.aiApiKey,
+      aiProvider: user.settings.aiProvider,
+      aiModel: user.settings.aiModel,
+      aiApiKey: maskedApiKey,
+      hasApiKey,
+      language: user.settings.language,
+      theme: user.settings.theme,
+      enableAiFeatures: user.settings.enableAiFeatures,
     } : null;
 
     return NextResponse.json({
       user: {
-        ...user,
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        image: user.image,
+        createdAt: user.createdAt,
         settings: maskedSettings,
       }
     });
@@ -173,18 +197,23 @@ export async function PATCH(request: NextRequest) {
         );
       }
 
+      // Encrypt API key before storing
+      const encryptedApiKey = validation.data.aiApiKey
+        ? encrypt(validation.data.aiApiKey)
+        : null;
+
       // Upsert user settings
       const settings = await prisma.userSettings.upsert({
         where: { userId: session.user.id },
         update: {
           aiProvider: validation.data.aiProvider,
-          aiApiKey: validation.data.aiApiKey,
+          aiApiKey: encryptedApiKey,
           aiModel: validation.data.aiModel,
         },
         create: {
           userId: session.user.id,
           aiProvider: validation.data.aiProvider,
-          aiApiKey: validation.data.aiApiKey,
+          aiApiKey: encryptedApiKey,
           aiModel: validation.data.aiModel,
         },
       });

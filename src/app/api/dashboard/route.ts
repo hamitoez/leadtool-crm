@@ -77,26 +77,44 @@ export async function GET() {
     const oneWeekAgo = new Date();
     oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
 
-    const recentProjects = await prisma.project.count({
-      where: {
-        userId,
-        createdAt: { gte: oneWeekAgo },
-      },
-    });
-
-    const recentTables = await prisma.table.count({
-      where: {
-        project: { userId },
-        createdAt: { gte: oneWeekAgo },
-      },
-    });
-
-    const recentRows = await prisma.row.count({
-      where: {
-        table: { project: { userId } },
-        createdAt: { gte: oneWeekAgo },
-      },
-    });
+    // Run all independent queries in parallel to avoid N+1 pattern
+    const [
+      recentProjects,
+      recentTables,
+      recentRows,
+      recentProjectsList,
+      recentTablesList,
+    ] = await Promise.all([
+      prisma.project.count({
+        where: {
+          userId,
+          createdAt: { gte: oneWeekAgo },
+        },
+      }),
+      prisma.table.count({
+        where: {
+          project: { userId },
+          createdAt: { gte: oneWeekAgo },
+        },
+      }),
+      prisma.row.count({
+        where: {
+          table: { project: { userId } },
+          createdAt: { gte: oneWeekAgo },
+        },
+      }),
+      prisma.project.findMany({
+        where: { userId },
+        orderBy: { createdAt: "desc" },
+        take: 3,
+      }),
+      prisma.table.findMany({
+        where: { project: { userId } },
+        include: { project: { select: { name: true } } },
+        orderBy: { createdAt: "desc" },
+        take: 3,
+      }),
+    ]);
 
     // Build project stats
     const projectStats: ProjectStat[] = projects.slice(0, 5).map((p) => ({
@@ -111,12 +129,6 @@ export async function GET() {
     const recentActivity: RecentActivityItem[] = [];
 
     // Add recent projects
-    const recentProjectsList = await prisma.project.findMany({
-      where: { userId },
-      orderBy: { createdAt: "desc" },
-      take: 3,
-    });
-
     for (const project of recentProjectsList) {
       recentActivity.push({
         id: `project-${project.id}`,
@@ -129,13 +141,6 @@ export async function GET() {
     }
 
     // Add recent tables
-    const recentTablesList = await prisma.table.findMany({
-      where: { project: { userId } },
-      include: { project: { select: { name: true } } },
-      orderBy: { createdAt: "desc" },
-      take: 3,
-    });
-
     for (const table of recentTablesList) {
       recentActivity.push({
         id: `table-${table.id}`,

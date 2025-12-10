@@ -374,7 +374,10 @@ export function TableViewClient({
 
   // Web Scraper completion handler
   const handleScrapeComplete = useCallback(
-    (results: Map<string, ScrapeResult>) => {
+    async (results: Map<string, ScrapeResult>) => {
+      // Collect all cell updates to persist to database
+      const cellUpdates: Array<{ cellId: string; value: CellValue }> = [];
+
       // Update local rows with scraped data
       setRows((prevRows) =>
         prevRows.map((row) => {
@@ -389,51 +392,53 @@ export function TableViewClient({
             const cell = updatedCells[col.id];
             if (!cell) return;
 
+            let newValue: CellValue | null = null;
+
             // First Name column (AI-extracted)
             if ((colNameLower.includes("vorname") || colNameLower === "first name" || colNameLower === "firstname") && result.firstName) {
-              updatedCells[col.id] = { ...cell, value: result.firstName };
+              newValue = result.firstName;
             }
 
             // Last Name column (AI-extracted)
             if ((colNameLower.includes("nachname") || colNameLower === "last name" || colNameLower === "lastname") && result.lastName) {
-              updatedCells[col.id] = { ...cell, value: result.lastName };
+              newValue = result.lastName;
             }
 
             // Email column
             if ((colNameLower.includes("email") || colNameLower.includes("e-mail")) && result.emails.length > 0) {
-              updatedCells[col.id] = { ...cell, value: result.emails[0] };
+              newValue = result.emails[0];
             }
 
             // Phone column
             if ((colNameLower.includes("phone") || colNameLower.includes("telefon") || colNameLower.includes("tel")) && result.phones.length > 0) {
-              updatedCells[col.id] = { ...cell, value: result.phones[0] };
+              newValue = result.phones[0];
             }
 
             // Address column
             if ((colNameLower.includes("address") || colNameLower.includes("adresse")) && result.addresses.length > 0) {
-              updatedCells[col.id] = { ...cell, value: result.addresses[0] };
+              newValue = result.addresses[0];
             }
 
             // LinkedIn column
             if (colNameLower.includes("linkedin") && result.social.linkedin) {
-              updatedCells[col.id] = { ...cell, value: result.social.linkedin };
+              newValue = result.social.linkedin;
             }
 
             // Facebook column
             if (colNameLower.includes("facebook") && result.social.facebook) {
-              updatedCells[col.id] = { ...cell, value: result.social.facebook };
+              newValue = result.social.facebook;
             }
 
             // Instagram column
             if (colNameLower.includes("instagram") && result.social.instagram) {
-              updatedCells[col.id] = { ...cell, value: result.social.instagram };
+              newValue = result.social.instagram;
             }
 
             // Contact name column
             if ((colNameLower.includes("kontakt") || colNameLower.includes("ansprech") || colNameLower.includes("contact")) && result.persons.length > 0) {
               const person = result.persons[0];
               if (person.name) {
-                updatedCells[col.id] = { ...cell, value: person.name };
+                newValue = person.name;
               }
             }
 
@@ -441,8 +446,14 @@ export function TableViewClient({
             if ((colNameLower.includes("position") || colNameLower.includes("titel") || colNameLower.includes("role")) && result.persons.length > 0) {
               const person = result.persons[0];
               if (person.position) {
-                updatedCells[col.id] = { ...cell, value: person.position };
+                newValue = person.position;
               }
+            }
+
+            // If we have a new value, update local state and queue for DB
+            if (newValue !== null) {
+              updatedCells[col.id] = { ...cell, value: newValue };
+              cellUpdates.push({ cellId: cell.id, value: newValue });
             }
           });
 
@@ -450,11 +461,25 @@ export function TableViewClient({
         })
       );
 
+      // Persist all cell updates to database
+      if (cellUpdates.length > 0) {
+        toast.info(`Speichere ${cellUpdates.length} Zellen...`);
+
+        // Update cells in parallel batches
+        const batchSize = 10;
+        for (let i = 0; i < cellUpdates.length; i += batchSize) {
+          const batch = cellUpdates.slice(i, i + batchSize);
+          await Promise.all(
+            batch.map(({ cellId, value }) => updateCell(cellId, value))
+          );
+        }
+      }
+
       setIsWebScraperOpen(false);
-      toast.success(`${results.size} Websites gescraped`);
+      toast.success(`${results.size} Websites gescraped und gespeichert`);
       router.refresh();
     },
-    [columns, router]
+    [columns, router, updateCell]
   );
 
   // Update selected row when cells are updated

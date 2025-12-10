@@ -2,8 +2,28 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { auth } from "@/lib/auth";
 import { JsonValue } from "@/types/table";
+import { z } from "zod";
+import { Prisma } from "@prisma/client";
 
 type Params = Promise<{ cellId: string }>;
+
+// Validation schema for cell updates
+const cellUpdateSchema = z.object({
+  value: z.union([
+    z.string().max(100000), // Text content up to 100KB
+    z.number(),
+    z.boolean(),
+    z.null(),
+    z.array(z.string()), // For multi-select
+  ]).optional(),
+  metadata: z.object({
+    source: z.string().max(100).optional(),
+    scrapedAt: z.string().optional(),
+    sourceUrl: z.string().url().optional(),
+    confidence: z.number().min(0).max(1).optional(),
+    aiGenerated: z.boolean().optional(),
+  }).passthrough().optional(),
+});
 
 export async function PATCH(
   request: NextRequest,
@@ -17,8 +37,19 @@ export async function PATCH(
     }
 
     const { cellId } = await context.params;
+
+    // Validate request body
     const body = await request.json();
-    const { value, metadata } = body;
+    const validation = cellUpdateSchema.safeParse(body);
+
+    if (!validation.success) {
+      return NextResponse.json(
+        { error: "Invalid request data", details: validation.error.flatten() },
+        { status: 400 }
+      );
+    }
+
+    const { value, metadata } = validation.data;
 
     // Check authorization
     const cell = await prisma.cell.findUnique({
@@ -52,8 +83,8 @@ export async function PATCH(
     const updatedCell = await prisma.cell.update({
       where: { id: cellId },
       data: {
-        value: value !== undefined ? value : cell.value,
-        metadata: metadata ? { ...(cell.metadata as Record<string, JsonValue>), ...metadata } : cell.metadata,
+        value: value !== undefined ? (value as Prisma.InputJsonValue) : (cell.value as Prisma.InputJsonValue),
+        metadata: metadata ? { ...(cell.metadata as Record<string, JsonValue>), ...metadata } as Prisma.InputJsonValue : (cell.metadata as Prisma.InputJsonValue),
       },
     });
 

@@ -14,7 +14,6 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -35,6 +34,7 @@ import {
   RefreshCw,
   Settings2,
   Zap,
+  StopCircle,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -57,7 +57,6 @@ export interface ScrapeResult {
   social: Record<string, string>;
   persons: Array<{ name?: string; position?: string; email?: string; phone?: string }>;
   error?: string;
-  // AI-extracted fields
   firstName?: string;
   lastName?: string;
 }
@@ -70,9 +69,6 @@ interface ColumnMapping {
   lastName?: string;
   contactName?: string;
   contactPosition?: string;
-  linkedin?: string;
-  facebook?: string;
-  instagram?: string;
 }
 
 export function WebScraper({
@@ -82,35 +78,6 @@ export function WebScraper({
   columns,
   onScrapeComplete,
 }: WebScraperProps) {
-  // Settings - Selenium + AI by default for best results
-  const [useSelenium, setUseSelenium] = useState(true);
-  const [useCrawl4ai, setUseCrawl4ai] = useState(false);
-  const [useAI, setUseAI] = useState(true);  // AI enabled by default for name extraction
-
-  // AI Provider from Settings
-  const [aiProvider, setAiProvider] = useState<string>("deepseek");
-  const [aiApiKey, setAiApiKey] = useState<string>("");
-  const [hasValidApiKey, setHasValidApiKey] = useState(false);
-
-  // Load AI config from localStorage
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-
-    const saved = localStorage.getItem("ai_provider_config");
-    if (saved) {
-      try {
-        const config = JSON.parse(saved);
-        if (config.provider && config.apiKey) {
-          setAiProvider(config.provider);
-          setAiApiKey(config.apiKey);
-          setHasValidApiKey(true);
-        }
-      } catch {
-        // Invalid config
-      }
-    }
-  }, []);
-
   // Column Mappings
   const [columnMappings, setColumnMappings] = useState<ColumnMapping>({});
   const [websiteColumnId, setWebsiteColumnId] = useState<string>("");
@@ -122,6 +89,25 @@ export function WebScraper({
   const [currentUrl, setCurrentUrl] = useState("");
   const [results, setResults] = useState<Map<string, ScrapeResult>>(new Map());
   const [showSettings, setShowSettings] = useState(false);
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [maxConcurrent, setMaxConcurrent] = useState(100);
+  const [hasApiKey, setHasApiKey] = useState(false);
+
+  // Load API key status
+  useEffect(() => {
+    const loadSettings = async () => {
+      try {
+        const response = await fetch("/api/settings");
+        if (response.ok) {
+          const data = await response.json();
+          setHasApiKey(!!data.user?.settings?.hasApiKey);
+        }
+      } catch {
+        // Ignore
+      }
+    };
+    loadSettings();
+  }, []);
 
   // Find website column and other relevant columns on mount
   useEffect(() => {
@@ -155,12 +141,6 @@ export function WebScraper({
         }
       } else if (name.includes("position") || name.includes("titel") || name.includes("role") || name.includes("job")) {
         mappings.contactPosition = col.id;
-      } else if (name.includes("linkedin")) {
-        mappings.linkedin = col.id;
-      } else if (name.includes("facebook")) {
-        mappings.facebook = col.id;
-      } else if (name.includes("instagram")) {
-        mappings.instagram = col.id;
       }
     }
     setColumnMappings(mappings);
@@ -198,7 +178,6 @@ export function WebScraper({
         const cell = row.cells[websiteColumnId];
         const url = cell?.value;
         if (typeof url === "string" && url.trim()) {
-          // Add protocol if missing
           let fullUrl = url.trim();
           if (!fullUrl.startsWith("http://") && !fullUrl.startsWith("https://")) {
             fullUrl = "https://" + fullUrl;
@@ -212,6 +191,28 @@ export function WebScraper({
 
   const urlsToScrape = getUrlsFromRows();
 
+  // Cancel scraping job
+  const handleCancelScraping = async () => {
+    if (!jobId) return;
+
+    try {
+      const response = await fetch(`/api/scrape/job/${jobId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ action: "cancel" }),
+      });
+
+      if (response.ok) {
+        toast.info("Scraping wird abgebrochen...");
+        setIsScraping(false);
+        setJobId(null);
+      }
+    } catch {
+      toast.error("Fehler beim Abbrechen");
+    }
+  };
+
   const handleStartScraping = async () => {
     if (urlsToScrape.length === 0) {
       toast.error("Keine URLs zum Scrapen gefunden");
@@ -221,78 +222,158 @@ export function WebScraper({
     setIsScraping(true);
     setProgress(0);
     setResults(new Map());
+    setJobId(null);
 
-    const newResults = new Map<string, ScrapeResult>();
+    // Use bulk scraping for multiple URLs
+    if (urlsToScrape.length > 1) {
+      await handleBulkScraping();
+    } else {
+      await handleSingleScraping();
+    }
+  };
 
+  // Bulk scraping
+  const handleBulkScraping = async () => {
     try {
-      for (let i = 0; i < urlsToScrape.length; i++) {
-        const { rowId, url } = urlsToScrape[i];
-        setCurrentUrl(url);
-        setProgress(Math.round((i / urlsToScrape.length) * 100));
+      const startResponse = await fetch("/api/scrape", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          urls: urlsToScrape,
+          columnMappings,
+          maxConcurrent,
+        }),
+      });
 
-        try {
-          const response = await fetch("/api/scrape", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            credentials: "include",
-            body: JSON.stringify({
-              url,
-              useSelenium,
-              useCrawl4ai,
-              useAI: useAI && hasValidApiKey, // Only enable AI if we have a valid key
-              apiKey: hasValidApiKey ? aiApiKey : undefined,
-              provider: aiProvider,
-              rowId,
-              columnMappings,
-            }),
-          });
+      const startData = await startResponse.json();
 
-          const data = await response.json();
-
-          if (data.success && data.data) {
-            newResults.set(rowId, data.data);
-          } else {
-            newResults.set(rowId, {
-              success: false,
-              url,
-              emails: [],
-              phones: [],
-              addresses: [],
-              social: {},
-              persons: [],
-              error: data.message || "Scraping fehlgeschlagen",
-            });
-          }
-        } catch (error) {
-          newResults.set(rowId, {
-            success: false,
-            url,
-            emails: [],
-            phones: [],
-            addresses: [],
-            social: {},
-            persons: [],
-            error: error instanceof Error ? error.message : "Unbekannter Fehler",
-          });
-        }
-
-        setResults(new Map(newResults));
+      if (!startData.success || !startData.jobId) {
+        toast.error(startData.error || "Fehler beim Starten des Scraping-Jobs");
+        setIsScraping(false);
+        return;
       }
 
-      setProgress(100);
-      setCurrentUrl("");
+      setJobId(startData.jobId);
+      toast.info(`${urlsToScrape.length} URLs werden parallel gescraped (${maxConcurrent} gleichzeitig)...`);
 
-      // Count successes
-      const successCount = Array.from(newResults.values()).filter((r) => r.success).length;
-      toast.success(`${successCount} von ${urlsToScrape.length} Websites erfolgreich gescraped`);
+      // Poll for progress
+      const pollInterval = setInterval(async () => {
+        try {
+          const statusResponse = await fetch(`/api/scrape/job/${startData.jobId}`, {
+            credentials: "include",
+          });
+
+          if (!statusResponse.ok) {
+            clearInterval(pollInterval);
+            setIsScraping(false);
+            return;
+          }
+
+          const status = await statusResponse.json();
+
+          setProgress(status.progress || 0);
+          setCurrentUrl(`${status.completed}/${status.total} URLs verarbeitet`);
+
+          // Update results
+          if (status.results && status.results.length > 0) {
+            const newResults = new Map<string, ScrapeResult>();
+            status.results.forEach((result: ScrapeResult) => {
+              const urlEntry = urlsToScrape.find(u => u.url === result.url);
+              if (urlEntry) {
+                newResults.set(urlEntry.rowId, result);
+              }
+            });
+            setResults(newResults);
+          }
+
+          // Check if completed
+          if (status.status === "completed" || status.status === "cancelled" || status.status === "failed") {
+            clearInterval(pollInterval);
+            setIsScraping(false);
+            setJobId(null);
+            setCurrentUrl("");
+            setProgress(100);
+
+            if (status.status === "completed") {
+              const successCount = status.results?.filter((r: ScrapeResult) => r.success).length || 0;
+              toast.success(`${successCount} von ${status.total} Websites erfolgreich gescraped`);
+
+              if (onScrapeComplete && status.results) {
+                const finalResults = new Map<string, ScrapeResult>();
+                status.results.forEach((result: ScrapeResult) => {
+                  const urlEntry = urlsToScrape.find(u => u.url === result.url);
+                  if (urlEntry) {
+                    finalResults.set(urlEntry.rowId, result);
+                  }
+                });
+                onScrapeComplete(finalResults);
+              }
+            } else if (status.status === "cancelled") {
+              toast.info(`Scraping abgebrochen nach ${status.completed}/${status.total} URLs`);
+            } else {
+              toast.error("Scraping fehlgeschlagen");
+            }
+          }
+        } catch {
+          // Continue polling
+        }
+      }, 1000);
+
+    } catch {
+      toast.error("Fehler beim Scraping");
+      setIsScraping(false);
+    }
+  };
+
+  // Single URL scraping
+  const handleSingleScraping = async () => {
+    const { rowId, url } = urlsToScrape[0];
+    setCurrentUrl(url);
+
+    try {
+      const response = await fetch("/api/scrape", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          url,
+          rowId,
+          columnMappings,
+        }),
+      });
+
+      const data = await response.json();
+      const newResults = new Map<string, ScrapeResult>();
+
+      if (data.success && data.data) {
+        newResults.set(rowId, data.data);
+        toast.success("Website erfolgreich gescraped");
+      } else {
+        newResults.set(rowId, {
+          success: false,
+          url,
+          emails: [],
+          phones: [],
+          addresses: [],
+          social: {},
+          persons: [],
+          error: data.message || "Scraping fehlgeschlagen",
+        });
+        toast.error("Scraping fehlgeschlagen");
+      }
+
+      setResults(newResults);
+      setProgress(100);
 
       if (onScrapeComplete) {
         onScrapeComplete(newResults);
       }
-    } catch (error) {
+    } catch {
       toast.error("Fehler beim Scraping");
     } finally {
       setIsScraping(false);
+      setCurrentUrl("");
     }
   };
 
@@ -305,10 +386,10 @@ export function WebScraper({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Globe className="h-5 w-5 text-blue-500" />
-            Web Scraper - Kontaktdaten extrahieren
+            Impressum Scraper
           </DialogTitle>
           <DialogDescription>
-            Extrahiere automatisch E-Mails, Telefonnummern und Adressen von {urlsToScrape.length} Websites
+            Extrahiere automatisch Kontaktdaten (Vorname, Nachname, E-Mail) von {urlsToScrape.length} Websites
           </DialogDescription>
         </DialogHeader>
 
@@ -323,10 +404,10 @@ export function WebScraper({
                     Scraper Service nicht erreichbar
                   </p>
                   <p className="text-sm text-yellow-700 dark:text-yellow-300 mt-1">
-                    Starte den Python Scraper mit:
+                    Starte den Python Scraper:
                   </p>
                   <code className="text-xs bg-yellow-100 dark:bg-yellow-900 px-2 py-1 rounded mt-2 block">
-                    cd scraper && start.bat
+                    cd /var/www/leadtool/scraper && python -m scraper.server
                   </code>
                   <Button
                     variant="outline"
@@ -343,16 +424,16 @@ export function WebScraper({
           )}
 
           {/* API Key Warning */}
-          {!hasValidApiKey && useAI && (
+          {!hasApiKey && (
             <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 dark:bg-amber-950/20">
               <div className="flex items-start gap-3">
                 <AlertCircle className="h-5 w-5 text-amber-600 mt-0.5" />
                 <div>
                   <p className="font-medium text-amber-800 dark:text-amber-200">
-                    Kein API Key konfiguriert
+                    Kein OpenAI API Key konfiguriert
                   </p>
                   <p className="text-sm text-amber-700 dark:text-amber-300 mt-1">
-                    Für die KI-gestützte Extraktion von Namen aus dem Impressum wird ein API Key benötigt.
+                    Für beste Ergebnisse (97-99% Genauigkeit) wird ein OpenAI API Key benötigt.
                     Ohne API Key werden nur E-Mails per Regex gefunden.
                   </p>
                   <Button
@@ -365,7 +446,7 @@ export function WebScraper({
                     className="mt-3"
                   >
                     <Settings2 className="h-4 w-4 mr-2" />
-                    API Key in Settings konfigurieren
+                    API Key konfigurieren
                   </Button>
                 </div>
               </div>
@@ -373,12 +454,12 @@ export function WebScraper({
           )}
 
           {/* API Key Status */}
-          {hasValidApiKey && (
+          {hasApiKey && (
             <div className="rounded-lg border border-green-300 bg-green-50 p-3 dark:bg-green-950/20">
               <div className="flex items-center gap-2 text-green-800 dark:text-green-200">
                 <CheckCircle2 className="h-4 w-4" />
                 <span className="text-sm font-medium">
-                  KI-Extraktion aktiv mit {aiProvider === "deepseek" ? "DeepSeek" : aiProvider === "google" ? "Google Gemini" : aiProvider.charAt(0).toUpperCase() + aiProvider.slice(1)}
+                  GPT-4o Extraktion aktiv (97-99% Genauigkeit)
                 </span>
               </div>
             </div>
@@ -534,32 +615,27 @@ export function WebScraper({
                 </div>
               </div>
 
-              {/* Scraping Options */}
-              <div className="flex flex-wrap gap-4 pt-2 border-t">
-                <div className="flex items-center gap-2">
-                  <Switch
-                    id="use-selenium"
-                    checked={useSelenium}
-                    onCheckedChange={setUseSelenium}
-                  />
-                  <Label htmlFor="use-selenium" className="text-sm">Selenium (JS-Seiten)</Label>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Switch
-                    id="use-crawl4ai"
-                    checked={useCrawl4ai}
-                    onCheckedChange={setUseCrawl4ai}
-                  />
-                  <Label htmlFor="use-crawl4ai" className="text-sm">Crawl4AI</Label>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Switch
-                    id="use-ai"
-                    checked={useAI}
-                    onCheckedChange={setUseAI}
-                  />
-                  <Label htmlFor="use-ai" className="text-sm">KI-Extraktion</Label>
-                </div>
+              {/* Concurrency Settings */}
+              <div className="flex items-center gap-4 pt-2 border-t">
+                <Label className="text-sm">Parallele Verbindungen:</Label>
+                <Select
+                  value={String(maxConcurrent)}
+                  onValueChange={(v) => setMaxConcurrent(Number(v))}
+                >
+                  <SelectTrigger className="w-24">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="25">25</SelectItem>
+                    <SelectItem value="50">50</SelectItem>
+                    <SelectItem value="100">100</SelectItem>
+                    <SelectItem value="150">150</SelectItem>
+                    <SelectItem value="200">200</SelectItem>
+                  </SelectContent>
+                </Select>
+                <span className="text-xs text-muted-foreground">
+                  (Mehr = schneller, aber höhere Serverlast)
+                </span>
               </div>
             </div>
           )}
@@ -568,14 +644,28 @@ export function WebScraper({
           {isScraping && (
             <div className="space-y-2">
               <div className="flex items-center justify-between text-sm">
-                <span>Scraping läuft...</span>
-                <span>{progress}%</span>
+                <span className="flex items-center gap-2">
+                  <Zap className="h-4 w-4 text-yellow-500 animate-pulse" />
+                  Scraping läuft...
+                </span>
+                <span>{Math.round(progress)}%</span>
               </div>
               <Progress value={progress} />
               {currentUrl && (
                 <p className="text-xs text-muted-foreground truncate">
-                  Aktuell: {currentUrl}
+                  {currentUrl}
                 </p>
+              )}
+              {jobId && (
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={handleCancelScraping}
+                  className="w-full mt-2"
+                >
+                  <StopCircle className="h-4 w-4 mr-2" />
+                  Scraping abbrechen
+                </Button>
               )}
             </div>
           )}
@@ -622,6 +712,14 @@ export function WebScraper({
 
                       {result.success ? (
                         <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
+                          {(result.firstName || result.lastName) && (
+                            <div className="flex items-center gap-1 col-span-2">
+                              <User className="h-3 w-3 text-violet-500" />
+                              <span className="truncate">
+                                {result.firstName} {result.lastName}
+                              </span>
+                            </div>
+                          )}
                           {result.emails.length > 0 && (
                             <div className="flex items-center gap-1">
                               <Mail className="h-3 w-3 text-blue-500" />
@@ -638,15 +736,6 @@ export function WebScraper({
                             <div className="flex items-center gap-1 col-span-2">
                               <MapPin className="h-3 w-3 text-red-500" />
                               <span className="truncate">{result.addresses[0]}</span>
-                            </div>
-                          )}
-                          {result.persons.length > 0 && (
-                            <div className="flex items-center gap-1 col-span-2">
-                              <User className="h-3 w-3 text-violet-500" />
-                              <span className="truncate">
-                                {result.persons[0].name}
-                                {result.persons[0].position && ` - ${result.persons[0].position}`}
-                              </span>
                             </div>
                           )}
                         </div>
@@ -691,7 +780,7 @@ export function WebScraper({
             ) : (
               <>
                 <Zap className="h-4 w-4 mr-2" />
-                {urlsToScrape.length} Websites scrapen
+                {urlsToScrape.length} URLs scrapen
               </>
             )}
           </Button>

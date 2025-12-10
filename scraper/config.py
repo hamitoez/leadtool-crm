@@ -1,93 +1,110 @@
-"""
-Scraper Configuration
-"""
+"""Configuration management for the Impressum scraper."""
+
+from typing import Optional
+from dataclasses import dataclass, field
 import os
-from dotenv import load_dotenv
+import logging
 
-load_dotenv()
+logger = logging.getLogger(__name__)
 
-# API Keys
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 
-# Server Config
-HOST = os.getenv("SCRAPER_HOST", "127.0.0.1")
-PORT = int(os.getenv("SCRAPER_PORT", "8765"))
+@dataclass
+class ScraperConfig:
+    """
+    Configuration for the Impressum scraper.
 
-# Selenium Config
-HEADLESS = os.getenv("SELENIUM_HEADLESS", "true").lower() == "true"
-TIMEOUT = int(os.getenv("SELENIUM_TIMEOUT", "30"))
+    Designed to integrate with the existing LeadTool settings system.
+    API keys are retrieved from user settings, not environment variables.
+    """
 
-# Rate Limiting
-REQUEST_DELAY = float(os.getenv("REQUEST_DELAY", "1.0"))  # Seconds between requests
-MAX_CONCURRENT = int(os.getenv("MAX_CONCURRENT", "3"))  # Max concurrent scrapes
+    # API Configuration (from user settings)
+    openai_api_key: Optional[str] = None
+    model: str = "gpt-4o"
 
-# Contact Patterns (Regex)
-EMAIL_PATTERNS = [
-    r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}',
-]
+    # HTTP Configuration
+    http_concurrency: int = 100
+    http_timeout: int = 15
+    dns_cache_ttl: int = 300
+    verify_ssl: bool = False
 
-PHONE_PATTERNS = [
-    # German formats
-    r'\+49[\s\-]?\d{2,4}[\s\-]?\d{3,8}[\s\-]?\d{0,6}',
-    r'0\d{2,4}[\s\-/]?\d{3,8}[\s\-/]?\d{0,6}',
-    # International
-    r'\+\d{1,3}[\s\-]?\d{2,4}[\s\-]?\d{3,8}[\s\-]?\d{0,6}',
-    # Generic
-    r'\(?\d{2,5}\)?[\s\-]?\d{3,8}[\s\-]?\d{0,6}',
-]
+    # LLM Configuration
+    llm_concurrency: int = 50
+    llm_temperature: float = 0.0
+    llm_max_tokens: int = 500
+    max_text_length: int = 4000
 
-# Pages to check for contact info
-CONTACT_PAGES = [
-    '/kontakt',
-    '/contact',
-    '/impressum',
-    '/imprint',
-    '/about',
-    '/ueber-uns',
-    '/about-us',
-    '/team',
-    '/contact-us',
-    '/kontaktieren',
-]
+    # Retry Configuration
+    max_retries: int = 3
+    retry_base_delay: float = 0.5
+    retry_max_delay: float = 30.0
 
-# Selectors for contact info
-CONTACT_SELECTORS = {
-    'email': [
-        'a[href^="mailto:"]',
-        '[class*="email"]',
-        '[class*="mail"]',
-        '[id*="email"]',
-        '[data-email]',
-    ],
-    'phone': [
-        'a[href^="tel:"]',
-        '[class*="phone"]',
-        '[class*="tel"]',
-        '[class*="telefon"]',
-        '[id*="phone"]',
-        '[data-phone]',
-    ],
-    'address': [
-        '[class*="address"]',
-        '[class*="adresse"]',
-        '[itemtype*="PostalAddress"]',
-        'address',
-    ],
-    'social': [
-        'a[href*="linkedin.com"]',
-        'a[href*="facebook.com"]',
-        'a[href*="instagram.com"]',
-        'a[href*="twitter.com"]',
-        'a[href*="xing.com"]',
-    ],
-    'person': [
-        '[class*="team"]',
-        '[class*="staff"]',
-        '[class*="employee"]',
-        '[class*="mitarbeiter"]',
-        '[class*="ansprechpartner"]',
-    ],
-}
+    # Server Configuration
+    host: str = "127.0.0.1"
+    port: int = 8765
+
+    @classmethod
+    def from_user_settings(cls, settings: dict) -> "ScraperConfig":
+        """
+        Create config from user settings dictionary.
+
+        This method is called from the Next.js backend when a user
+        initiates a scraping job. The settings come from the database.
+
+        Args:
+            settings: Dict with user settings from database
+
+        Returns:
+            ScraperConfig instance
+        """
+        return cls(
+            openai_api_key=settings.get("aiApiKey") or settings.get("openai_api_key"),
+            model=settings.get("aiModel") or settings.get("scraper_model", "gpt-4o"),
+            http_concurrency=settings.get("scraper_http_concurrency", 100),
+            llm_concurrency=settings.get("scraper_llm_concurrency", 50),
+            http_timeout=settings.get("scraper_http_timeout", 15),
+            max_text_length=settings.get("scraper_max_text_length", 4000),
+        )
+
+    @classmethod
+    def from_env(cls) -> "ScraperConfig":
+        """
+        Create config from environment variables.
+
+        Used for standalone operation or testing.
+        """
+        return cls(
+            openai_api_key=os.getenv("OPENAI_API_KEY"),
+            model=os.getenv("SCRAPER_MODEL", "gpt-4o"),
+            http_concurrency=int(os.getenv("SCRAPER_HTTP_CONCURRENCY", "100")),
+            llm_concurrency=int(os.getenv("SCRAPER_LLM_CONCURRENCY", "50")),
+            http_timeout=int(os.getenv("SCRAPER_HTTP_TIMEOUT", "15")),
+            host=os.getenv("SCRAPER_HOST", "127.0.0.1"),
+            port=int(os.getenv("SCRAPER_PORT", "8765")),
+        )
+
+    def validate(self) -> bool:
+        """
+        Validate the configuration.
+
+        Returns:
+            True if valid, raises ValueError if not
+        """
+        if not self.openai_api_key:
+            raise ValueError("OpenAI API key is required for LLM extraction")
+
+        if self.http_concurrency < 1 or self.http_concurrency > 500:
+            raise ValueError("HTTP concurrency must be between 1 and 500")
+
+        if self.llm_concurrency < 1 or self.llm_concurrency > 200:
+            raise ValueError("LLM concurrency must be between 1 and 200")
+
+        return True
+
+    @property
+    def has_api_key(self) -> bool:
+        """Check if API key is configured."""
+        return bool(self.openai_api_key)
+
+
+# Default configuration instance
+default_config = ScraperConfig()

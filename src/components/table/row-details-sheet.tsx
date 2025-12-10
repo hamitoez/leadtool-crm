@@ -151,18 +151,23 @@ export function RowDetailsSheet({
 
   const promptInputRef = useRef<HTMLTextAreaElement>(null);
 
-  // Load API Key
+  // Load API Key from database
   useEffect(() => {
-    const savedConfig = localStorage.getItem("ai_provider_config");
-    if (savedConfig) {
+    const loadAiSettings = async () => {
       try {
-        const config = JSON.parse(savedConfig);
-        setApiKey(config.apiKey || "");
-        setAiProvider(config.provider || "anthropic");
+        const response = await fetch("/api/settings");
+        if (response.ok) {
+          const data = await response.json();
+          if (data.user?.settings?.aiProvider && data.user?.settings?.hasApiKey) {
+            setAiProvider(data.user.settings.aiProvider);
+            setApiKey("configured"); // Placeholder - backend uses actual key
+          }
+        }
       } catch {
-        // Fallback
+        // Failed to load settings
       }
-    }
+    };
+    loadAiSettings();
   }, []);
 
   // Reset state when sheet closes

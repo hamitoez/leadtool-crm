@@ -144,41 +144,34 @@ export function AIComplimentGenerator({
   const [bulkProgress, setBulkProgress] = useState(0);
   const [bulkResults, setBulkResults] = useState<Map<string, { compliment?: string; error?: string }>>(new Map());
 
-  // API Key aus localStorage
+  // API Key aus Datenbank
   const [apiKey, setApiKey] = useState<string>("");
   const [aiProvider, setAiProvider] = useState<string>("anthropic");
+  const [hasValidApiKey, setHasValidApiKey] = useState(false);
 
   // Verfügbare Spalten für Platzhalter
   const [availableColumns, setAvailableColumns] = useState<{ id: string; name: string; fieldKey: string }[]>([]);
 
+  // Load AI settings from API (database)
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      // Zuerst das neue Format versuchen (ai_provider_config)
-      const configStr = localStorage.getItem("ai_provider_config");
-      if (configStr) {
-        try {
-          const config = JSON.parse(configStr);
-          if (config.apiKey && config.provider) {
-            setApiKey(config.apiKey);
-            setAiProvider(config.provider);
-            return;
+    const loadAiSettings = async () => {
+      try {
+        const response = await fetch("/api/settings");
+        if (response.ok) {
+          const data = await response.json();
+          if (data.user?.settings?.aiProvider && data.user?.settings?.hasApiKey) {
+            setAiProvider(data.user.settings.aiProvider);
+            setHasValidApiKey(true);
+            // The backend will use the API key directly - we just track that we have one
+            setApiKey("configured"); // Placeholder to indicate key exists
           }
-        } catch {
-          // Invalid JSON, continue with fallbacks
         }
+      } catch {
+        // Failed to load settings
       }
-
-      // Fallback auf die alten Keys
-      const generalKey = localStorage.getItem("ai_api_key");
-      const provider = localStorage.getItem("ai_provider") || "anthropic";
-
-      if (generalKey) {
-        setApiKey(generalKey);
-        setAiProvider(provider);
-      } else {
-        setApiKey(localStorage.getItem("anthropic_api_key") || "");
-        setAiProvider("anthropic");
-      }
+    };
+    if (open) {
+      loadAiSettings();
     }
   }, [open]);
 

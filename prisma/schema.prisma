@@ -79,6 +79,7 @@ model Account {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([provider, providerAccountId])
+  @@index([userId])
   @@map("accounts")
 }
 
@@ -89,6 +90,8 @@ model Session {
   expires      DateTime
   user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@index([userId])
+  @@index([expires])
   @@map("sessions")
 }
 
@@ -119,6 +122,8 @@ model Project {
   updatedAt DateTime @updatedAt
 
   @@index([userId])
+  @@index([userId, createdAt])
+  @@index([updatedAt])
   @@map("projects")
 }
 
@@ -138,6 +143,8 @@ model Table {
   updatedAt DateTime @updatedAt
 
   @@index([projectId])
+  @@index([projectId, createdAt])
+  @@index([updatedAt])
   @@map("tables")
 }
 
@@ -232,6 +239,7 @@ model Row {
 
   @@index([tableId])
   @@index([tableId, position])
+  @@index([createdAt])
   @@map("rows")
 }
 

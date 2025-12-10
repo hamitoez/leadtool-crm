@@ -25,28 +25,34 @@ const importConfigSchema = z.object({
   rows: z.array(z.array(z.string())),
 });
 
-// Größere Batch-Größe für bessere Performance
-const BATCH_SIZE = 250;
+// Kleinere Batch-Größe für Stabilität bei großen Imports
+const BATCH_SIZE = 100;
+const CELL_BATCH_SIZE = 5000; // Max Zellen pro Insert
 
 /**
  * Bereinigt einen String von ungültigen JSON-Zeichen
  */
 function sanitizeString(str: string): string {
   if (!str) return str;
+  if (typeof str !== 'string') return String(str);
 
-  // Entferne oder ersetze ungültige Unicode-Zeichen
+  // Entferne oder ersetze ungültige Zeichen
   let sanitized = str
     // Entferne NULL-Bytes
     .replace(/\x00/g, '')
     // Ersetze ungültige Kontrollzeichen (außer Tab, Newline, CR)
-    .replace(/[\x01-\x08\x0B\x0C\x0E-\x1F]/g, ' ')
+    .replace(/[\x01-\x08\x0B\x0C\x0E-\x1F\x7F]/g, ' ')
     // Ersetze ungültige UTF-16 Surrogates
     .replace(/[\uD800-\uDFFF]/g, '')
-    // Ersetze unvollständige Backslash-Escapes
-    .replace(/\\x[0-9A-Fa-f]?(?![0-9A-Fa-f])/g, '')
+    // Entferne alle Backslash-Sequenzen die Probleme verursachen könnten
+    .replace(/\\x[0-9A-Fa-f]{0,1}(?![0-9A-Fa-f])/g, '')
+    .replace(/\\x(?![0-9A-Fa-f]{2})/g, '')
     .replace(/\\u[0-9A-Fa-f]{0,3}(?![0-9A-Fa-f])/g, '')
-    // Entferne alleinstehende Backslashes vor ungültigen Escape-Zeichen
-    .replace(/\\(?!["\\/bfnrtu])/g, '\\\\');
+    .replace(/\\u(?![0-9A-Fa-f]{4})/g, '')
+    // Ersetze alleinstehende Backslashes
+    .replace(/\\(?!["\\/bfnrtux])/g, '')
+    // Entferne nicht-druckbare Zeichen
+    .replace(/[\uFFFD\uFFFE\uFFFF]/g, '');
 
   return sanitized;
 }
@@ -246,122 +252,119 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Create table and columns in a transaction
-    // Increase timeout for large imports (default is 5s, we use 120s)
-    const result = await prisma.$transaction(
-      async (tx) => {
-        // Create table
-        const table = await tx.table.create({
-          data: {
-            projectId,
-            name: config.tableName,
-            description: `Imported ${config.rows.length} rows from CSV`,
-          },
-        });
-
-        // Create columns
-        const columns = await Promise.all(
-          includedMappings.map((mapping) =>
-            tx.column.create({
-              data: {
-                tableId: table.id,
-                name: mapping.columnName,
-                type: mapping.columnType,
-                position: mapping.position,
-                width: 200,
-                isVisible: true,
-              },
-            })
-          )
-        );
-
-        // Create column lookup map
-        const columnMap = new Map(
-          columns.map((col, idx) => [includedMappings[idx].csvColumn, col.id])
-        );
-
-        // Batch insert rows and cells
-        const totalRows = config.rows.length;
-        let importedRows = 0;
-
-        for (let i = 0; i < totalRows; i += BATCH_SIZE) {
-          const batch = config.rows.slice(i, i + BATCH_SIZE);
-
-          // Create rows for this batch
-          const rowRecords = await Promise.all(
-            batch.map((_, batchIdx) =>
-              tx.row.create({
-                data: {
-                  tableId: table.id,
-                  position: i + batchIdx,
-                },
-              })
-            )
-          );
-
-          // Create cells for all rows in batch
-          const cellData = [];
-
-          for (let rowIdx = 0; rowIdx < rowRecords.length; rowIdx++) {
-            const row = rowRecords[rowIdx];
-            const csvRow = batch[rowIdx];
-
-            for (const mapping of includedMappings) {
-              const columnId = columnMap.get(mapping.csvColumn);
-              if (!columnId) continue;
-
-              // WICHTIG: Verwende csvIndex wenn vorhanden, sonst position als Fallback
-              // csvIndex === -1 bedeutet "leere Spalte" (aus Template ohne CSV-Mapping)
-              const csvColumnIndex =
-                mapping.csvIndex !== undefined
-                  ? mapping.csvIndex
-                  : mapping.position;
-
-              // Wenn csvIndex === -1, dann ist es eine leere Spalte (manuell/KI)
-              let rawValue: string | undefined;
-              if (csvColumnIndex >= 0) {
-                rawValue = csvRow[csvColumnIndex];
-              } else {
-                rawValue = undefined; // Leere Spalte
-              }
-
-              // Verwende die robuste processValue Funktion
-              const processedValue = processValue(rawValue, mapping.columnType);
-
-              cellData.push({
-                rowId: row.id,
-                columnId,
-                value: processedValue,
-                metadata: {
-                  source: csvColumnIndex >= 0 ? "csv_import" : "template_empty",
-                  importedAt: new Date().toISOString(),
-                  originalValue: rawValue?.substring(0, 100), // Speichere Original für Debugging
-                },
-              });
-            }
-          }
-
-          // Batch insert cells
-          if (cellData.length > 0) {
-            await tx.cell.createMany({
-              data: cellData,
-            });
-          }
-
-          importedRows += batch.length;
-        }
-
-        return {
-          tableId: table.id,
-          projectId,
-          rowsImported: importedRows,
-        };
+    // Step 1: Create table and columns (small transaction)
+    const table = await prisma.table.create({
+      data: {
+        projectId,
+        name: config.tableName,
+        description: `Imported ${config.rows.length} rows from CSV`,
       },
-      {
-        timeout: 120000, // 120 seconds for large imports
-        maxWait: 10000, // Maximum time to wait for transaction slot
-      }
+    });
+
+    // Create columns
+    const columns = await prisma.column.createMany({
+      data: includedMappings.map((mapping) => ({
+        tableId: table.id,
+        name: mapping.columnName,
+        type: mapping.columnType,
+        position: mapping.position,
+        width: 200,
+        isVisible: true,
+      })),
+    });
+
+    // Fetch created columns to get IDs
+    const createdColumns = await prisma.column.findMany({
+      where: { tableId: table.id },
+      orderBy: { position: 'asc' },
+    });
+
+    // Create column lookup map
+    const columnMap = new Map(
+      createdColumns.map((col, idx) => [includedMappings[idx].csvColumn, col.id])
     );
+
+    // Step 2: Import rows and cells in small batches (without wrapping transaction)
+    const totalRows = config.rows.length;
+    let importedRows = 0;
+    const importTimestamp = new Date().toISOString();
+
+    for (let i = 0; i < totalRows; i += BATCH_SIZE) {
+      const batch = config.rows.slice(i, i + BATCH_SIZE);
+
+      // Create rows for this batch using createMany
+      const rowData = batch.map((_, batchIdx) => ({
+        tableId: table.id,
+        position: i + batchIdx,
+      }));
+
+      await prisma.row.createMany({ data: rowData });
+
+      // Fetch the created rows to get IDs
+      const rowRecords = await prisma.row.findMany({
+        where: {
+          tableId: table.id,
+          position: { gte: i, lt: i + batch.length },
+        },
+        orderBy: { position: 'asc' },
+      });
+
+      // Create cells for all rows in batch
+      const cellData: Array<{
+        rowId: string;
+        columnId: string;
+        value: any;
+        metadata: any;
+      }> = [];
+
+      for (let rowIdx = 0; rowIdx < rowRecords.length; rowIdx++) {
+        const row = rowRecords[rowIdx];
+        const csvRow = batch[rowIdx];
+
+        for (const mapping of includedMappings) {
+          const columnId = columnMap.get(mapping.csvColumn);
+          if (!columnId) continue;
+
+          const csvColumnIndex =
+            mapping.csvIndex !== undefined
+              ? mapping.csvIndex
+              : mapping.position;
+
+          let rawValue: string | undefined;
+          if (csvColumnIndex >= 0) {
+            rawValue = csvRow[csvColumnIndex];
+          } else {
+            rawValue = undefined;
+          }
+
+          const processedValue = processValue(rawValue, mapping.columnType);
+
+          cellData.push({
+            rowId: row.id,
+            columnId,
+            value: processedValue,
+            metadata: {
+              source: csvColumnIndex >= 0 ? "csv_import" : "template_empty",
+              importedAt: importTimestamp,
+            },
+          });
+        }
+      }
+
+      // Insert cells in smaller chunks to avoid memory issues
+      for (let c = 0; c < cellData.length; c += CELL_BATCH_SIZE) {
+        const cellBatch = cellData.slice(c, c + CELL_BATCH_SIZE);
+        await prisma.cell.createMany({ data: cellBatch });
+      }
+
+      importedRows += batch.length;
+    }
+
+    const result = {
+      tableId: table.id,
+      projectId,
+      rowsImported: importedRows,
+    };
 
     const response: ImportResult = {
       success: true,

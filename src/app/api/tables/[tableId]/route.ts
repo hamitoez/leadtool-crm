@@ -1,6 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { auth } from "@/lib/auth";
+import { z } from "zod";
+import { Prisma } from "@prisma/client";
+
+// Validation schema for table updates
+const tableUpdateSchema = z.object({
+  name: z.string().min(1).max(100).optional(),
+  description: z.string().max(500).nullable().optional(),
+  settings: z.object({
+    defaultView: z.enum(["table", "kanban", "calendar"]).optional(),
+    rowHeight: z.enum(["compact", "default", "expanded"]).optional(),
+    showLineNumbers: z.boolean().optional(),
+    enableFilters: z.boolean().optional(),
+    enableSorting: z.boolean().optional(),
+  }).passthrough().nullable().optional(),
+});
 
 type Params = Promise<{ tableId: string }>;
 
@@ -93,8 +108,19 @@ export async function PATCH(
     }
 
     const { tableId } = await context.params;
+
+    // Validate request body
     const body = await request.json();
-    const { name, description, settings } = body;
+    const validation = tableUpdateSchema.safeParse(body);
+
+    if (!validation.success) {
+      return NextResponse.json(
+        { error: "Invalid request data", details: validation.error.flatten() },
+        { status: 400 }
+      );
+    }
+
+    const { name, description, settings } = validation.data;
 
     // Check authorization
     const table = await prisma.table.findUnique({
@@ -116,13 +142,13 @@ export async function PATCH(
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    // Update table
+    // Update table with validated data
     const updatedTable = await prisma.table.update({
       where: { id: tableId },
       data: {
         ...(name && { name }),
         ...(description !== undefined && { description }),
-        ...(settings && { settings }),
+        ...(settings && { settings: settings as Prisma.InputJsonValue }),
       },
     });
 

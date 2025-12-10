@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { z } from "zod";
 import prisma from "@/lib/prisma";
+import { verifyRowAccess } from "@/lib/security/authorization";
+import { decrypt } from "@/lib/security/encryption";
 
 // Scraper service URL
 const SCRAPER_URL = process.env.SCRAPER_URL || "http://127.0.0.1:8765";
@@ -9,14 +11,10 @@ const SCRAPER_URL = process.env.SCRAPER_URL || "http://127.0.0.1:8765";
 // Validation schemas
 const singleScrapeSchema = z.object({
   url: z.string().url(),
-  useSelenium: z.boolean().default(true),
-  useCrawl4ai: z.boolean().default(false),
-  useAI: z.boolean().default(true),
   apiKey: z.string().optional(),
-  provider: z.enum(["anthropic", "openai", "google", "deepseek", "groq", "mistral"]).default("deepseek"),
   // Optional: Update cells directly
   rowId: z.string().optional(),
-  columnMappings: z.record(z.string(), z.string()).optional(), // e.g., { "email": "columnId1", "phone": "columnId2" }
+  columnMappings: z.record(z.string(), z.string()).optional(),
 });
 
 const bulkScrapeSchema = z.object({
@@ -24,12 +22,9 @@ const bulkScrapeSchema = z.object({
     url: z.string().url(),
     rowId: z.string().optional(),
   })),
-  useSelenium: z.boolean().default(true),
-  useCrawl4ai: z.boolean().default(false),
-  useAI: z.boolean().default(true),
   apiKey: z.string().optional(),
-  provider: z.enum(["anthropic", "openai", "google", "deepseek", "groq", "mistral"]).default("deepseek"),
   columnMappings: z.record(z.string(), z.string()).optional(),
+  maxConcurrent: z.number().min(1).max(200).default(100),
 });
 
 interface ScrapeResult {
@@ -42,7 +37,6 @@ interface ScrapeResult {
   persons: Array<{ name?: string; position?: string; email?: string; phone?: string }>;
   pages_scraped: string[];
   error?: string;
-  // AI-extracted fields
   firstName?: string;
   lastName?: string;
 }
@@ -59,11 +53,24 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
+    const userId = session.user.id;
+
+    // Get user settings for API key
+    const userSettings = await prisma.userSettings.findUnique({
+      where: { userId },
+      select: { aiApiKey: true, aiProvider: true },
+    });
+
+    // Decrypt API key if present
+    const decryptedApiKey = userSettings?.aiApiKey
+      ? decrypt(userSettings.aiApiKey)
+      : null;
+
     const body = await request.json();
 
     // Check if it's a bulk request
     if (body.urls && Array.isArray(body.urls)) {
-      return handleBulkScrape(body, session.user.id);
+      return handleBulkScrape(body, userId, decryptedApiKey || body.apiKey);
     }
 
     // Single scrape
@@ -75,18 +82,25 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { url, useSelenium, useCrawl4ai, useAI, apiKey, provider, rowId, columnMappings } = validation.data;
+    const { url, apiKey, rowId, columnMappings } = validation.data;
+    const effectiveApiKey = decryptedApiKey || apiKey;
+
+    // SECURITY: Verify user owns the row before updating cells
+    if (rowId) {
+      try {
+        await verifyRowAccess(rowId, userId);
+      } catch (error) {
+        return NextResponse.json(
+          { error: "Access denied to this row" },
+          { status: 403 }
+        );
+      }
+    }
 
     // Call scraper service
-    const result = await callScraperService(url, {
-      useSelenium,
-      useCrawl4ai,
-      useAI,
-      apiKey,
-      provider,
-    });
+    const result = await callScraperService(url, effectiveApiKey);
 
-    // If rowId and columnMappings provided, update cells
+    // If rowId and columnMappings provided, update cells (already verified access)
     if (rowId && columnMappings && result.success) {
       await updateCellsWithScrapeResult(rowId, result, columnMappings as Record<string, string>);
     }
@@ -111,7 +125,7 @@ export async function POST(request: NextRequest) {
 /**
  * Handle bulk scraping
  */
-async function handleBulkScrape(body: unknown, userId: string) {
+async function handleBulkScrape(body: unknown, userId: string, apiKey?: string | null) {
   const validation = bulkScrapeSchema.safeParse(body);
   if (!validation.success) {
     return NextResponse.json(
@@ -120,7 +134,54 @@ async function handleBulkScrape(body: unknown, userId: string) {
     );
   }
 
-  const { urls, useSelenium, useCrawl4ai, useAI, apiKey, provider, columnMappings } = validation.data;
+  const { urls, maxConcurrent } = validation.data;
+
+  // SECURITY: Verify user owns all rows before processing
+  const rowIds = urls.filter(u => u.rowId).map(u => u.rowId as string);
+  if (rowIds.length > 0) {
+    try {
+      // Verify all rows belong to user in a single query
+      const rows = await prisma.row.findMany({
+        where: {
+          id: { in: rowIds },
+        },
+        select: {
+          id: true,
+          table: {
+            select: {
+              project: {
+                select: { userId: true },
+              },
+            },
+          },
+        },
+      });
+
+      // Check all rows belong to this user
+      for (const row of rows) {
+        if (row.table.project.userId !== userId) {
+          return NextResponse.json(
+            { error: "Access denied to one or more rows" },
+            { status: 403 }
+          );
+        }
+      }
+
+      // Check we found all requested rows
+      if (rows.length !== rowIds.length) {
+        return NextResponse.json(
+          { error: "One or more rows not found" },
+          { status: 404 }
+        );
+      }
+    } catch (error) {
+      console.error("Row access verification failed:", error);
+      return NextResponse.json(
+        { error: "Failed to verify row access" },
+        { status: 500 }
+      );
+    }
+  }
 
   // Call bulk scraper service
   const response = await fetch(`${SCRAPER_URL}/scrape/bulk`, {
@@ -128,11 +189,8 @@ async function handleBulkScrape(body: unknown, userId: string) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       urls: urls.map(u => u.url),
-      use_selenium: useSelenium,
-      use_crawl4ai: useCrawl4ai,
-      use_ai: useAI,
       api_key: apiKey,
-      provider,
+      max_concurrent: maxConcurrent,
     }),
   });
 
@@ -151,6 +209,7 @@ async function handleBulkScrape(body: unknown, userId: string) {
     jobId: jobData.job_id,
     status: jobData.status,
     total: jobData.total,
+    maxConcurrent: jobData.max_concurrent,
   });
 }
 
@@ -159,13 +218,7 @@ async function handleBulkScrape(body: unknown, userId: string) {
  */
 async function callScraperService(
   url: string,
-  options: {
-    useSelenium: boolean;
-    useCrawl4ai: boolean;
-    useAI: boolean;
-    apiKey?: string;
-    provider: string;
-  }
+  apiKey?: string | null,
 ): Promise<ScrapeResult> {
   try {
     const response = await fetch(`${SCRAPER_URL}/scrape`, {
@@ -173,11 +226,7 @@ async function callScraperService(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         url,
-        use_selenium: options.useSelenium,
-        use_crawl4ai: options.useCrawl4ai,
-        use_ai: options.useAI,
-        api_key: options.apiKey,
-        provider: options.provider,
+        api_key: apiKey,
       }),
     });
 
@@ -186,33 +235,20 @@ async function callScraperService(
       throw new Error(`Scraper service error: ${error}`);
     }
 
-    return await response.json();
+    const data = await response.json();
+    return data.data || data;
 
   } catch (error) {
-    // If scraper service is not running, return error
     if (error instanceof TypeError && error.message.includes("fetch")) {
-      throw new Error("Scraper service is not running. Please start it with: cd scraper && start.bat");
+      throw new Error("Scraper service is not running. Start with: cd scraper && python -m scraper.server");
     }
     throw error;
   }
 }
 
 /**
- * Split a full name into first name and last name
- */
-function splitName(fullName: string): { firstName: string; lastName: string } {
-  const parts = fullName.trim().split(/\s+/);
-  if (parts.length === 1) {
-    return { firstName: parts[0], lastName: "" };
-  }
-  // First part is first name, rest is last name
-  const firstName = parts[0];
-  const lastName = parts.slice(1).join(" ");
-  return { firstName, lastName };
-}
-
-/**
  * Update cells with scraped data
+ * Note: Authorization should be verified BEFORE calling this function
  */
 async function updateCellsWithScrapeResult(
   rowId: string,
@@ -221,7 +257,7 @@ async function updateCellsWithScrapeResult(
 ) {
   const updates: Array<{ columnId: string; value: string }> = [];
 
-  // Priority 1: AI-extracted firstName/lastName (most reliable for German Impressum)
+  // Map firstName/lastName
   if (columnMappings.firstName && result.firstName) {
     updates.push({ columnId: columnMappings.firstName, value: result.firstName });
   }
@@ -230,94 +266,69 @@ async function updateCellsWithScrapeResult(
     updates.push({ columnId: columnMappings.lastName, value: result.lastName });
   }
 
-  // Map scraped data to columns
+  // Map email
   if (columnMappings.email && result.emails.length > 0) {
     updates.push({ columnId: columnMappings.email, value: result.emails[0] });
   }
 
+  // Map phone
   if (columnMappings.phone && result.phones.length > 0) {
     updates.push({ columnId: columnMappings.phone, value: result.phones[0] });
   }
 
+  // Map address
   if (columnMappings.address && result.addresses.length > 0) {
     updates.push({ columnId: columnMappings.address, value: result.addresses[0] });
   }
 
-  if (columnMappings.linkedin && result.social.linkedin) {
-    updates.push({ columnId: columnMappings.linkedin, value: result.social.linkedin });
-  }
-
-  if (columnMappings.facebook && result.social.facebook) {
-    updates.push({ columnId: columnMappings.facebook, value: result.social.facebook });
-  }
-
-  if (columnMappings.instagram && result.social.instagram) {
-    updates.push({ columnId: columnMappings.instagram, value: result.social.instagram });
-  }
-
-  // Person data (fallback if AI extraction didn't get names)
+  // Person data fallback
   if (result.persons.length > 0) {
     const person = result.persons[0];
 
-    // Full name mapping
     if (columnMappings.contactName && person.name) {
       updates.push({ columnId: columnMappings.contactName, value: person.name });
     }
 
-    // Split name into first name and last name (only if not already set by AI)
-    if (person.name && (columnMappings.firstName || columnMappings.lastName)) {
-      const { firstName, lastName } = splitName(person.name);
-
-      // Only use fallback if AI didn't extract
-      if (columnMappings.firstName && firstName && !result.firstName) {
-        updates.push({ columnId: columnMappings.firstName, value: firstName });
-      }
-
-      if (columnMappings.lastName && lastName && !result.lastName) {
-        updates.push({ columnId: columnMappings.lastName, value: lastName });
+    if (person.name && !result.firstName && !result.lastName) {
+      const parts = person.name.trim().split(/\s+/);
+      if (parts.length >= 2) {
+        if (columnMappings.firstName && parts[0]) {
+          updates.push({ columnId: columnMappings.firstName, value: parts[0] });
+        }
+        if (columnMappings.lastName && parts.slice(1).join(" ")) {
+          updates.push({ columnId: columnMappings.lastName, value: parts.slice(1).join(" ") });
+        }
       }
     }
 
     if (columnMappings.contactPosition && person.position) {
       updates.push({ columnId: columnMappings.contactPosition, value: person.position });
     }
-
-    // Person-specific email (prioritize over general email)
-    if (columnMappings.contactEmail && person.email) {
-      updates.push({ columnId: columnMappings.contactEmail, value: person.email });
-    }
-
-    // Also fill regular email column with person's email if not already set
-    if (columnMappings.email && person.email && result.emails.length === 0) {
-      updates.push({ columnId: columnMappings.email, value: person.email });
-    }
-
-    if (columnMappings.contactPhone && person.phone) {
-      updates.push({ columnId: columnMappings.contactPhone, value: person.phone });
-    }
   }
 
-  // Update cells in database
-  for (const update of updates) {
-    await prisma.cell.updateMany({
-      where: {
-        rowId,
-        columnId: update.columnId,
-      },
-      data: {
-        value: update.value,
-        metadata: {
-          source: "web_scrape",
-          scrapedAt: new Date().toISOString(),
-          sourceUrl: result.url,
+  // Update cells in database using transaction for consistency
+  await prisma.$transaction(
+    updates.map(update =>
+      prisma.cell.updateMany({
+        where: {
+          rowId,
+          columnId: update.columnId,
         },
-      },
-    });
-  }
+        data: {
+          value: update.value,
+          metadata: {
+            source: "web_scrape",
+            scrapedAt: new Date().toISOString(),
+            sourceUrl: result.url,
+          },
+        },
+      })
+    )
+  );
 }
 
 /**
- * GET /api/scrape/health
+ * GET /api/scrape
  * Check if scraper service is running
  */
 export async function GET() {
@@ -342,7 +353,7 @@ export async function GET() {
     return NextResponse.json({
       status: "error",
       message: "Scraper service is not running",
-      hint: "Start the scraper with: cd scraper && start.bat",
+      hint: "Start with: cd scraper && python -m scraper.server",
     }, { status: 503 });
   }
 }
