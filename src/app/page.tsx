@@ -1,4 +1,4 @@
-// LeadPilot - Landing Page
+// LeadPilot - Landing Page v1.0
 import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import Link from "next/link";
