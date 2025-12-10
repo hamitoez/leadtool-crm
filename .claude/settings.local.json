@@ -57,7 +57,14 @@
       "Bash(kill:*)",
       "Bash(pkill:*)",
       "Bash(source:*)",
-      "Bash(pm2 start:*)"
+      "Bash(pm2 start:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(ssh-keygen:*)",
+      "Bash(git remote set-url:*)",
+      "Bash(ssh:*)",
+      "Bash(ufw status:*)",
+      "Bash(iptables:*)"
     ],
     "deny": [],
     "ask": []

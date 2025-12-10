@@ -84,7 +84,7 @@ function cellValueToString(value: ExcelJS.CellValue): string {
     }
 
     // Last resort: try to find any text-like property
-    const obj = value as Record<string, unknown>;
+    const obj = value as unknown as Record<string, unknown>;
     if (obj.value !== undefined) {
       return cellValueToString(obj.value as ExcelJS.CellValue);
     }
