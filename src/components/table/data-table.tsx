@@ -168,7 +168,7 @@ export function DataTable({
   enableVirtualization = false, // Disabled by default for simpler rendering
   enableColumnReordering = true,
   enableRowSelection = true,
-  pageSize = 100,
+  pageSize = 30,
   onGenerateCompliments,
   onScrapeWebsites,
   views = [],
