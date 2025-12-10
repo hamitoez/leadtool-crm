@@ -14,8 +14,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "LeadTool CRM",
-  description: "Notion-like CRM with automated contact data extraction",
+  title: "LeadPilot - Automatisierte Lead-Generierung",
+  description: "Extrahieren Sie automatisch Kontaktdaten von Firmenwebsites. KI-gestütztes Web-Scraping für moderne Vertriebsteams.",
 };
 
 export default function RootLayout({

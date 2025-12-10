@@ -1,5 +1,5 @@
-// LeadTool CRM - Prisma Schema
-// Notion-like CRM with automated contact data extraction
+// LeadPilot - Prisma Schema
+// Automatisierte Lead-Generierung mit KI-gestütztem Web-Scraping
 
 generator client {
   provider = "prisma-client-js"

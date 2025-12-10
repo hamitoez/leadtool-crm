@@ -80,7 +80,7 @@ export default function UnderConstructionPage() {
             </li>
             <li className="flex items-center gap-2">
               <Wrench className="h-4 w-4 text-yellow-400" />
-              Notion-ähnliche Tabellenoberfläche
+              Professionelle Tabellenoberfläche
             </li>
           </ul>
         </div>
@@ -121,7 +121,7 @@ export default function UnderConstructionPage() {
 
         {/* Footer */}
         <p className="text-center text-gray-500 text-sm mt-6">
-          &copy; {new Date().getFullYear()} LeadTool. Alle Rechte vorbehalten.
+          &copy; {new Date().getFullYear()} LeadPilot. Alle Rechte vorbehalten.
         </p>
       </div>
     </div>
