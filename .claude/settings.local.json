@@ -64,7 +64,10 @@
       "Bash(git remote set-url:*)",
       "Bash(ssh:*)",
       "Bash(ufw status:*)",
-      "Bash(iptables:*)"
+      "Bash(iptables:*)",
+      "Bash(pm2 delete:*)",
+      "Bash(git pull:*)",
+      "Bash(git fetch:*)"
     ],
     "deny": [],
     "ask": []
