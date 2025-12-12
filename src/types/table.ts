@@ -33,6 +33,8 @@ export type CellValue = JsonValue;
 export interface RowData {
   id: string;
   position: number;
+  isFavorite: boolean;
+  notes: string | null;
   cells: Record<string, CellData>;
   createdAt: Date;
   updatedAt: Date;

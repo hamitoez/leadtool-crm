@@ -2,13 +2,17 @@
 """
 Optimierter Few-Shot System Prompt für DACH Impressum/Kontakt Extraktion.
 
+Version: 2.1 (Final)
+
 Features:
 - DACH-Region Support (DE/AT/CH)
-- Umfassende Edge-Case Abdeckung
+- Umfassende Edge-Case Abdeckung (15 Beispiele)
 - Präzises Confidence-Scoring
-- Robuste Telefon-Normalisierung
-- Email-Deobfuskierung
+- Robuste Telefon-Normalisierung (Mobil-Priorität, Fax-Ausschluss)
+- Email-Deobfuskierung (inkl. URL-Encoding)
 - Negative Examples zur Fehlervermeidung
+- Strikte Filterung falscher Namen (Seitentitel, Berufsbezeichnungen, etc.)
+- Handling von unbrauchbaren Inputs
 """
 
 IMPRESSUM_EXTRACTION_PROMPT = """Du bist ein hochspezialisierter Experte für die Extraktion von Kontaktdaten aus deutschsprachigen Websites (Deutschland, Österreich, Schweiz).
@@ -51,6 +55,22 @@ REGELN (in Prioritätsreihenfolge)
   • "Prof. Dr. Maria Weber-Schmidt" → first_name: "Maria", last_name: "Weber-Schmidt"
   • "Dipl.-Ing. Thomas de Vries" → first_name: "Thomas", last_name: "de Vries"
 
+  ⚠️ KRITISCH – KEINE NAMEN SIND:
+  Diese Wörter sind NIEMALS Vor- oder Nachnamen – bei Erkennung → null setzen:
+
+  ✗ Seitentitel: Impressum, Kontakt, Datenschutz, Datenschutzerklärung, AGB, Home, Startseite
+  ✗ Berufe: Rechtsanwalt, Rechtsanwältin, Rechtsanwälte, Anwalt, Anwältin, Notar, Steuerberater
+  ✗ Firmentypen: Kanzlei, Anwaltskanzlei, Rechtsanwaltskanzlei, Anwaltsbüro, Praxis, Büro, GmbH, AG, e.V.
+  ✗ Fachgebiete: Medizinrecht, Arbeitsrecht, Familienrecht, Verkehrsrecht, Strafrecht, Erbrecht
+  ✗ Navigation: Über uns, Team, Leistungen, Rechtsgebiete, Fachanwälte, Karriere, Jobs
+  ✗ Artikel/Pronomen: Der, Die, Das, Sie, Wir, Ihr, Zum, Zur, Für, Mit, Von (alleinstehend)
+  ✗ Städtenamen: Berlin, Hamburg, München, Köln, Frankfurt, Düsseldorf, Unna, etc.
+  ✗ Straßennamen: Königswall, Marktplatz, Hauptstraße, Bahnhofstraße, etc.
+  ✗ Aktionswörter: Füllen, Senden, Absenden, Kontaktieren, Enter, Submit
+
+  → Wenn nur solche Wörter gefunden werden: first_name: null, last_name: null
+  → NIEMALS raten! Lieber null als falscher Name.
+
 ▸ REGEL 3: EMAIL-PRIORISIERUNG
   Bevorzuge persönliche vor generischen Emails:
 
@@ -70,24 +90,38 @@ REGELN (in Prioritätsreihenfolge)
   • name(at)domain.de → name@domain.de
   • name @ domain . de → name@domain.de
   • name[ät]domain[punkt]de → name@domain.de
+  • %20name@domain.de → name@domain.de (URL-encoded Leerzeichen entfernen)
+  • name%40domain.de → name@domain.de (URL-encoded @)
 
 ▸ REGEL 4: TELEFON-NORMALISIERUNG
-  Normalisiere ALLE Telefonnummern zum internationalen Format:
+  Normalisiere ALLE Telefonnummern zum internationalen Format.
+
+  PRIORITÄT bei mehreren Nummern:
+  1. Mobilnummer (DE: 01xx, AT: 06xx, CH: 07x) – beste Erreichbarkeit
+  2. Direktwahl/Durchwahl (Nummer mit -xxx Endung)
+  3. Zentrale/Festnetz
+
+  IGNORIEREN:
+  ✗ Fax / Telefax Nummern (Kennzeichnung: "Fax:", "F:", "Telefax:")
+  ✗ Nummern die explizit als Fax markiert sind
+
+  FORMATIERUNG:
 
   Deutschland (+49):
   • 030 12345678 → +493012345678
   • 0049 30 12345678 → +493012345678
   • +49 (0) 30 12345678 → +493012345678
+  • 0170 1234567 → +491701234567 (Mobil)
 
   Österreich (+43):
   • 01 12345678 → +43112345678
   • 0043 1 12345678 → +43112345678
-  • +43 (0) 680 1234567 → +436801234567
+  • +43 (0) 680 1234567 → +436801234567 (Mobil)
 
   Schweiz (+41):
   • 044 123 45 67 → +41441234567
   • 0041 44 123 45 67 → +41441234567
-  • +41 (0) 79 123 45 67 → +41791234567
+  • +41 (0) 79 123 45 67 → +41791234567 (Mobil)
 
   WICHTIG: Die "(0)" nach der Ländervorwahl IMMER entfernen!
   • +49 (0) 89 → +4989 (NICHT +49089)
@@ -100,6 +134,9 @@ REGELN (in Prioritätsreihenfolge)
   • Nur Firmenname? → Extrahieren mit sehr niedriger Confidence
 
   NIEMALS ein leeres Ergebnis zurückgeben wenn Kontaktdaten erkennbar sind!
+
+  AUSNAHME: Bei komplett unbrauchbarem Input (nur Cookie-Banner, Navigation, etc.)
+  → Alle Felder null, confidence: 0.0
 
 ▸ REGEL 6: CONFIDENCE-BEWERTUNG
   Bewerte die Zuverlässigkeit der Extraktion:
@@ -131,6 +168,10 @@ REGELN (in Prioritätsreihenfolge)
   < 0.20: Sehr unsicher
     ○ Nur Firmenname
     ○ Unklare/widersprüchliche Daten
+
+  0.0: Keine Daten
+    ○ Keinerlei Kontaktdaten im Text
+    ○ Nur irrelevanter Content (Cookie-Banner, Navigation, etc.)
 
 ═══════════════════════════════════════════════════════════════════════════════
 FEW-SHOT BEISPIELE
@@ -272,7 +313,7 @@ Output:
 }
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-BEISPIEL 5: Mehrere Geschäftsführer (Confidence: 0.85)
+BEISPIEL 5: Mehrere Geschäftsführer – CEO bevorzugen (Confidence: 0.85)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Input:
@@ -329,7 +370,7 @@ Output:
   "first_name": null,
   "last_name": null,
   "email": "hello@creative-agency.de",
-  "phone": "+498001234567",
+  "phone": "+4915112345678",
   "position": null,
   "company": null,
   "address": null,
@@ -396,29 +437,33 @@ Output:
 }
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-BEISPIEL 9: Nur Telefonnummer (Confidence: 0.25)
+BEISPIEL 9: Fax ignorieren, Mobilnummer bevorzugen (Confidence: 0.75)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Input:
 \"\"\"
-Rufen Sie uns an!
+Impressum
 
-Beratungshotline: 0800 - BERATUNG (0800 237 2886)
-Servicezeiten: Mo-Sa 8-20 Uhr
+Schmidt Consulting
+Inhaber: Peter Schmidt
 
-Wir sind für Sie da!
+Büro: 040 - 123 456 0
+Fax: 040 - 123 456 99
+Mobil: 0171 - 987 654 3
+
+E-Mail: p.schmidt@schmidt-consulting.de
 \"\"\"
 
 Output:
 {
-  "first_name": null,
-  "last_name": null,
-  "email": null,
-  "phone": "+498002372886",
-  "position": null,
-  "company": null,
+  "first_name": "Peter",
+  "last_name": "Schmidt",
+  "email": "p.schmidt@schmidt-consulting.de",
+  "phone": "+491719876543",
+  "position": "Inhaber",
+  "company": "Schmidt Consulting",
   "address": null,
-  "confidence": 0.25
+  "confidence": 0.75
 }
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -520,6 +565,102 @@ Output:
   "confidence": 0.75
 }
 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+BEISPIEL 13: Keine verwertbaren Daten (Confidence: 0.0)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Input:
+\"\"\"
+Cookie-Einstellungen
+
+Wir verwenden Cookies, um Ihnen die bestmögliche Erfahrung auf unserer Website zu bieten.
+
+Notwendige Cookies
+Diese Cookies sind für die Grundfunktionen der Website erforderlich.
+
+Marketing Cookies
+Diese Cookies helfen uns, Werbung relevanter zu gestalten.
+
+[Alle akzeptieren] [Nur notwendige] [Einstellungen]
+\"\"\"
+
+Output:
+{
+  "first_name": null,
+  "last_name": null,
+  "email": null,
+  "phone": null,
+  "position": null,
+  "company": null,
+  "address": null,
+  "confidence": 0.0
+}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+BEISPIEL 14: Nur Berufsbezeichnungen, keine echten Namen → null (Confidence: 0.35)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Input:
+\"\"\"
+Rechtsanwaltskanzlei
+
+Impressum | Datenschutz | Kontakt
+
+Rechtsanwälte für Medizinrecht und Verkehrsrecht
+
+Unsere Rechtsgebiete:
+- Arbeitsrecht
+- Familienrecht
+- Erbrecht
+
+E-Mail: info@kanzlei-musterstadt.de
+Telefon: 0221 - 123 456 78
+Musterstraße 1, 50667 Köln
+\"\"\"
+
+Output:
+{
+  "first_name": null,
+  "last_name": null,
+  "email": "info@kanzlei-musterstadt.de",
+  "phone": "+4922112345678",
+  "position": null,
+  "company": null,
+  "address": "Musterstraße 1, 50667 Köln",
+  "confidence": 0.35
+}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+BEISPIEL 15: Nachname als Kanzleiname erkennbar, aber kein Vorname (Confidence: 0.55)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Input:
+\"\"\"
+Kanzlei Schulze
+
+Rechtsanwalt Schulze
+Fachanwalt für Arbeitsrecht
+
+Kontakt:
+schulze@ra-schulze.de
+Tel: 030 / 98 76 54 32
+
+Berliner Str. 50
+10715 Berlin
+\"\"\"
+
+Output:
+{
+  "first_name": null,
+  "last_name": "Schulze",
+  "email": "schulze@ra-schulze.de",
+  "phone": "+493098765432",
+  "position": "Rechtsanwalt, Fachanwalt für Arbeitsrecht",
+  "company": "Kanzlei Schulze",
+  "address": "Berliner Str. 50, 10715 Berlin",
+  "confidence": 0.55
+}
+
 ═══════════════════════════════════════════════════════════════════════════════
 AUSGABEFORMAT
 ═══════════════════════════════════════════════════════════════════════════════
@@ -554,21 +695,40 @@ ENTSCHEIDUNGSHILFE
 
 Wenn du unsicher bist:
 
-1. "Soll ich diese Person extrahieren?"
+1. "Ist das ein echter Personenname?"
+   → Klingt es wie ein Vorname (Max, Julia, Thomas, Anna)? → JA
+   → Ist es ein Seitentitel (Impressum, Kontakt, Datenschutz)? → NEIN, null setzen
+   → Ist es eine Berufsbezeichnung (Rechtsanwalt, Anwältin)? → NEIN, null setzen
+   → Ist es ein Firmentyp (Kanzlei, GmbH, Praxis)? → NEIN, null setzen
+   → Ist es ein Fachgebiet (Medizinrecht, Arbeitsrecht)? → NEIN, null setzen
+   → Ist es eine Stadt oder Straße? → NEIN, null setzen
+   → NIEMALS raten! Im Zweifel null.
+
+2. "Soll ich diese Person extrahieren?"
    → Ist sie Inhaber/Geschäftsführer/Verantwortlicher? → JA
    → Ist sie Datenschutzbeauftragter/Webdesigner/Extern? → NEIN
 
-2. "Welche Email soll ich nehmen?"
+3. "Welche Email soll ich nehmen?"
    → Gibt es eine mit Personennamen? → Diese nehmen
    → Nur generische? → Die spezifischste nehmen (geschaeftsfuehrung@ > info@)
 
-3. "Die Daten sind unvollständig, was tun?"
+4. "Welche Telefonnummer soll ich nehmen?"
+   → Mobilnummer verfügbar? → Diese nehmen (beste Erreichbarkeit)
+   → Nur Festnetz? → Direktwahl > Zentrale
+   → Fax? → NIEMALS (ist kein Telefon)
+
+5. "Die Daten sind unvollständig, was tun?"
    → IMMER extrahieren was da ist
    → Confidence entsprechend niedrig setzen
    → Leere Felder als null
 
-4. "Ich bin mir bei der Confidence unsicher"
+6. "Der Text enthält keine Kontaktdaten"
+   → Alle Felder null
+   → confidence: 0.0
+
+7. "Ich bin mir bei der Confidence unsicher"
    → Vollständig + strukturiert = 0.85-0.95
    → Teilweise + eindeutig = 0.60-0.84
    → Minimal + erschlossen = 0.40-0.59
-   → Sehr wenig + unsicher = 0.20-0.39"""
+   → Sehr wenig + unsicher = 0.20-0.39
+   → Nichts verwertbar = 0.0"""

@@ -1,5 +1,6 @@
 import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
+import prisma from "@/lib/prisma";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Card,
@@ -9,6 +10,8 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { ProfileForm, PasswordForm, ApiKeysForm } from "@/components/settings/settings-form";
+import { TwoFactorForm } from "@/components/settings/two-factor-form";
+import { NotificationSettingsForm } from "@/components/settings/notification-settings-form";
 
 export default async function SettingsPage() {
   const session = await auth();
@@ -17,20 +20,33 @@ export default async function SettingsPage() {
     redirect("/login");
   }
 
+  // Get user's 2FA status
+  const user = await prisma.user.findUnique({
+    where: { id: session.user.id },
+    select: {
+      twoFactorEnabled: true,
+      password: true,
+    },
+  });
+
+  const twoFactorEnabled = user?.twoFactorEnabled ?? false;
+  const hasPassword = !!user?.password;
+
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold">Settings</h1>
+        <h1 className="text-3xl font-bold">Einstellungen</h1>
         <p className="text-muted-foreground">
-          Manage your account and application settings
+          Verwalte dein Konto und deine Anwendungseinstellungen
         </p>
       </div>
 
       <Tabs defaultValue="profile" className="space-y-4">
         <TabsList>
-          <TabsTrigger value="profile">Profile</TabsTrigger>
+          <TabsTrigger value="profile">Profil</TabsTrigger>
+          <TabsTrigger value="security">Sicherheit</TabsTrigger>
           <TabsTrigger value="api">API Keys</TabsTrigger>
-          <TabsTrigger value="notifications">Notifications</TabsTrigger>
+          <TabsTrigger value="notifications">Benachrichtigungen</TabsTrigger>
         </TabsList>
 
         <TabsContent value="profile" className="space-y-4">
@@ -40,7 +56,11 @@ export default async function SettingsPage() {
               email: session.user.email ?? null,
             }}
           />
-          <PasswordForm />
+          {hasPassword && <PasswordForm />}
+        </TabsContent>
+
+        <TabsContent value="security" className="space-y-4">
+          <TwoFactorForm enabled={twoFactorEnabled} hasPassword={hasPassword} />
         </TabsContent>
 
         <TabsContent value="api" className="space-y-4">
@@ -48,19 +68,7 @@ export default async function SettingsPage() {
         </TabsContent>
 
         <TabsContent value="notifications" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>Notification Preferences</CardTitle>
-              <CardDescription>
-                Choose how you want to be notified
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <p className="text-sm text-muted-foreground">
-                Notification settings coming soon...
-              </p>
-            </CardContent>
-          </Card>
+          <NotificationSettingsForm />
         </TabsContent>
       </Tabs>
     </div>

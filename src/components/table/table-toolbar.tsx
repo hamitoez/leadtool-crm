@@ -30,6 +30,7 @@ interface TableToolbarProps<TData> {
   table: Table<TData>;
   onAddRow?: () => void;
   addColumnButton?: React.ReactNode;
+  quickAddButton?: React.ReactNode;
   globalFilter?: string;
   onGlobalFilterChange?: (value: string) => void;
   onExport?: (format: "csv" | "json", contactFilter?: ContactDataFilter) => void;
@@ -58,6 +59,7 @@ export function TableToolbar<TData>({
   table,
   onAddRow,
   addColumnButton,
+  quickAddButton,
   globalFilter,
   onGlobalFilterChange,
   onExport,
@@ -87,11 +89,46 @@ export function TableToolbar<TData>({
 
   const isFiltered = table.getState().columnFilters.length > 0;
 
+  // Calculate stats
+  const totalRows = table.getFilteredRowModel().rows.length;
+  const favoriteCount = table.getFilteredRowModel().rows.filter(
+    (row) => (row.original as { isFavorite?: boolean }).isFavorite
+  ).length;
+
   return (
     <div className="flex flex-col gap-4 p-4 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="flex items-center justify-between gap-4">
-        {/* Saved Views & Search */}
+        {/* Stats & Saved Views & Search */}
         <div className="flex-1 flex items-center gap-2">
+          {/* Stats Badge */}
+          <div className="hidden md:flex items-center gap-2 text-sm text-muted-foreground border-r pr-3 mr-1">
+            <span className="font-medium text-foreground">{totalRows}</span>
+            <span>Leads</span>
+            {favoriteCount > 0 && (
+              <>
+                <span className="text-muted-foreground/50">•</span>
+                <span className="text-amber-600 dark:text-amber-400">{favoriteCount} ⭐</span>
+              </>
+            )}
+            {contactDataStats && (
+              <>
+                <span className="text-muted-foreground/50">•</span>
+                <span
+                  className={
+                    contactDataStats.withContact / contactDataStats.total > 0.7
+                      ? "text-green-600 dark:text-green-400"
+                      : contactDataStats.withContact / contactDataStats.total > 0.3
+                        ? "text-amber-600 dark:text-amber-400"
+                        : "text-red-600 dark:text-red-400"
+                  }
+                  title={`${Math.round((contactDataStats.withContact / contactDataStats.total) * 100)}% mit Kontaktdaten`}
+                >
+                  {contactDataStats.withContact} mit Kontakt
+                </span>
+              </>
+            )}
+          </div>
+
           {/* Saved Views Dropdown */}
           {showSavedViews && (
             <SavedViewsDropdown
@@ -241,6 +278,9 @@ export function TableToolbar<TData>({
 
           {/* Add Column */}
           {addColumnButton}
+
+          {/* Quick Add */}
+          {quickAddButton}
 
           {/* Add Row */}
           {onAddRow && (

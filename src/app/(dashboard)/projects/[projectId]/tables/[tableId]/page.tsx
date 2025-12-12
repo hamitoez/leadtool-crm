@@ -72,6 +72,8 @@ export default async function TableViewPage({ params }: TableViewPageProps) {
   const rows: RowData[] = table.rows.map((row) => ({
     id: row.id,
     position: row.position,
+    isFavorite: row.isFavorite,
+    notes: row.notes,
     cells: row.cells.reduce(
       (acc, cell) => ({
         ...acc,

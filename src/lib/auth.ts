@@ -1,9 +1,12 @@
 import NextAuth from "next-auth";
 import { PrismaAdapter } from "@auth/prisma-adapter";
 import CredentialsProvider from "next-auth/providers/credentials";
+import GoogleProvider from "next-auth/providers/google";
+import GitHubProvider from "next-auth/providers/github";
 import bcrypt from "bcryptjs";
 import prisma from "./prisma";
 import { checkRateLimit, recordFailedAttempt, clearRateLimit } from "./security/rate-limiter";
+import { verifyTOTPCode, decryptTOTPSecret, verifyBackupCode } from "./security/totp";
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
   adapter: PrismaAdapter(prisma),
@@ -15,13 +18,30 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
   pages: {
     signIn: "/login",
     newUser: "/register",
+    error: "/auth/error",
   },
   providers: [
+    // Google OAuth Provider
+    GoogleProvider({
+      clientId: process.env.GOOGLE_CLIENT_ID || "",
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET || "",
+      allowDangerousEmailAccountLinking: true,
+    }),
+
+    // GitHub OAuth Provider
+    GitHubProvider({
+      clientId: process.env.GITHUB_CLIENT_ID || "",
+      clientSecret: process.env.GITHUB_CLIENT_SECRET || "",
+      allowDangerousEmailAccountLinking: true,
+    }),
+
+    // Credentials Provider (Email/Password)
     CredentialsProvider({
       name: "credentials",
       credentials: {
         email: { label: "Email", type: "email" },
         password: { label: "Password", type: "password" },
+        totpCode: { label: "2FA Code", type: "text" },
       },
       async authorize(credentials) {
         if (!credentials?.email || !credentials?.password) {
@@ -40,6 +60,11 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
 
         const user = await prisma.user.findUnique({
           where: { email },
+          include: {
+            backupCodes: {
+              where: { usedAt: null },
+            },
+          },
         });
 
         if (!user || !user.password) {
@@ -59,6 +84,46 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           throw new Error("Invalid credentials");
         }
 
+        // Check if email is verified
+        if (!user.emailVerified) {
+          throw new Error("EMAIL_NOT_VERIFIED");
+        }
+
+        // Check 2FA if enabled
+        if (user.twoFactorEnabled && user.twoFactorSecret) {
+          const totpCode = credentials.totpCode as string | undefined;
+
+          if (!totpCode) {
+            // Signal that 2FA is required
+            throw new Error("2FA_REQUIRED:" + user.id);
+          }
+
+          // Try TOTP code first
+          const secret = decryptTOTPSecret(user.twoFactorSecret);
+          let isValidCode = verifyTOTPCode(secret, totpCode);
+
+          // If TOTP fails, try backup codes
+          if (!isValidCode && totpCode.length >= 8) {
+            for (const backupCode of user.backupCodes) {
+              const isValidBackup = await verifyBackupCode(totpCode, backupCode.code);
+              if (isValidBackup) {
+                // Mark backup code as used
+                await prisma.twoFactorBackupCode.update({
+                  where: { id: backupCode.id },
+                  data: { usedAt: new Date() },
+                });
+                isValidCode = true;
+                break;
+              }
+            }
+          }
+
+          if (!isValidCode) {
+            recordFailedAttempt(email);
+            throw new Error("Invalid 2FA code");
+          }
+        }
+
         // Successful login - clear rate limit
         clearRateLimit(email);
 
@@ -72,9 +137,27 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     }),
   ],
   callbacks: {
-    async jwt({ token, user }) {
+    async signIn({ user, account }) {
+      // For OAuth logins, mark email as verified automatically
+      if (account?.provider !== "credentials" && user.email) {
+        const existingUser = await prisma.user.findUnique({
+          where: { email: user.email },
+        });
+
+        if (existingUser && !existingUser.emailVerified) {
+          await prisma.user.update({
+            where: { email: user.email },
+            data: { emailVerified: new Date() },
+          });
+        }
+      }
+
+      return true;
+    },
+    async jwt({ token, user, account }) {
       if (user) {
         token.id = user.id;
+        token.provider = account?.provider;
       }
       return token;
     },

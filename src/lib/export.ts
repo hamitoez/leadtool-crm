@@ -1,4 +1,5 @@
 import { RowData, ColumnConfig, CellValue } from "@/types/table";
+import * as XLSX from "xlsx";
 
 // Helper to convert CellValue to string for export
 const cellValueToString = (value: CellValue): string => {
@@ -163,7 +164,7 @@ export const filterRowsBySelectedFields = (
 export type ContactDataFilter = "all" | "with-contact" | "without-contact";
 
 export interface ExportOptions {
-  format: "csv" | "json";
+  format: "csv" | "json" | "xlsx";
   includeHeaders?: boolean;
   columns?: string[]; // Specific column IDs to export
   contactDataFilter?: ContactDataFilter; // Legacy filter by contact data presence
@@ -279,8 +280,67 @@ export function exportToJSON(
   return JSON.stringify(exportData, null, 2);
 }
 
+export function exportToExcel(
+  rows: RowData[],
+  columns: ColumnConfig[],
+  options: ExportOptions = { format: "xlsx" }
+): Blob {
+  const { columns: selectedColumnIds } = options;
+
+  // Filter columns if specific ones are requested
+  const exportColumns = selectedColumnIds
+    ? columns.filter((col) => selectedColumnIds.includes(col.id))
+    : columns;
+
+  // Apply row filters
+  const filteredRows = applyRowFilters(rows, columns, options);
+
+  // Prepare data for Excel
+  const headers = exportColumns.map((col) => col.name);
+  const data = filteredRows.map((row) =>
+    exportColumns.map((col) => {
+      const cell = row.cells[col.id];
+      return cell ? cellValueToString(cell.value) : "";
+    })
+  );
+
+  // Create worksheet
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...data]);
+
+  // Auto-size columns
+  const colWidths = headers.map((header, i) => {
+    const maxLength = Math.max(
+      header.length,
+      ...data.map((row) => String(row[i] || "").length)
+    );
+    return { wch: Math.min(maxLength + 2, 50) };
+  });
+  ws["!cols"] = colWidths;
+
+  // Create workbook
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Data");
+
+  // Generate buffer
+  const buffer = XLSX.write(wb, { type: "array", bookType: "xlsx" });
+  return new Blob([buffer], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+}
+
 export function downloadFile(content: string, filename: string, mimeType: string): void {
   const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+export function downloadBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
@@ -341,7 +401,7 @@ export function getContactDataStats(rows: RowData[], columns: ColumnConfig[]): {
 
 // Export config type matching the dialog
 export interface ExportDialogConfig {
-  format: "csv" | "json";
+  format: "csv" | "json" | "xlsx";
   filterMode: "all" | "with-selected" | "without-selected";
   selectedFields: string[];
   requireAll: boolean;
@@ -388,6 +448,9 @@ export function exportTableAdvanced(
   if (config.format === "csv") {
     const content = exportToCSV(rows, columns, options);
     downloadFile(content, `${filename}.csv`, "text/csv;charset=utf-8;");
+  } else if (config.format === "xlsx") {
+    const blob = exportToExcel(rows, columns, options);
+    downloadBlob(blob, `${filename}.xlsx`);
   } else {
     const content = exportToJSON(rows, columns, options);
     downloadFile(content, `${filename}.json`, "application/json");

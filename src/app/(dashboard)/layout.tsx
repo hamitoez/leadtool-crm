@@ -16,10 +16,13 @@ export default async function DashboardLayout({
 
   return (
     <div className="flex h-screen">
-      <Sidebar />
+      {/* Sidebar - hidden on mobile */}
+      <div className="hidden md:block">
+        <Sidebar />
+      </div>
       <div className="flex flex-1 flex-col overflow-hidden">
         <Header />
-        <main className="flex-1 overflow-auto bg-muted/30 p-6">
+        <main className="flex-1 overflow-auto bg-muted/30 p-4 md:p-6">
           {children}
         </main>
       </div>

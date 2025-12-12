@@ -23,10 +23,17 @@ model User {
   image         String?
   password      String?   // For credentials provider
 
-  projects Project[]
-  accounts Account[]
-  sessions Session[]
-  settings UserSettings?
+  // 2FA Fields
+  twoFactorEnabled Boolean  @default(false)
+  twoFactorSecret  String?  // Encrypted TOTP secret
+
+  projects            Project[]
+  accounts            Account[]
+  sessions            Session[]
+  settings            UserSettings?
+  backupCodes         TwoFactorBackupCode[]
+  passwordResetTokens PasswordResetToken[]
+  notifications       Notification[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -53,6 +60,13 @@ model UserSettings {
 
   // Feature Flags
   enableAiFeatures Boolean @default(true)
+
+  // Notification Settings
+  notifyScrapingComplete Boolean @default(true)
+  notifyScrapingFailed   Boolean @default(true)
+  notifyImportComplete   Boolean @default(true)
+  notifyImportFailed     Boolean @default(true)
+  emailNotifications     Boolean @default(false)
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -102,6 +116,45 @@ model VerificationToken {
 
   @@unique([identifier, token])
   @@map("verification_tokens")
+}
+
+// ============================================
+// PASSWORD RESET TOKEN
+// ============================================
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  token     String    @unique
+  userId    String
+  expiresAt DateTime
+  usedAt    DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([token])
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("password_reset_tokens")
+}
+
+// ============================================
+// 2FA BACKUP CODES
+// ============================================
+
+model TwoFactorBackupCode {
+  id     String    @id @default(cuid())
+  userId String
+  code   String    // Hashed backup code
+  usedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@map("two_factor_backup_codes")
 }
 
 // ============================================
@@ -230,6 +283,10 @@ model Row {
   tableId  String
   position Int
 
+  // Quick features
+  isFavorite Boolean @default(false)
+  notes      String? @db.Text
+
   table      Table       @relation(fields: [tableId], references: [id], onDelete: Cascade)
   cells      Cell[]
   extraction Extraction?
@@ -239,6 +296,7 @@ model Row {
 
   @@index([tableId])
   @@index([tableId, position])
+  @@index([tableId, isFavorite])
   @@index([createdAt])
   @@map("rows")
 }
@@ -385,6 +443,36 @@ enum JobStatus {
   COMPLETED
   FAILED
   STALLED
+}
+
+// ============================================
+// NOTIFICATIONS
+// ============================================
+
+enum NotificationType {
+  SCRAPE_COMPLETED
+  SCRAPE_FAILED
+  IMPORT_COMPLETED
+  IMPORT_FAILED
+  SYSTEM
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  type      NotificationType
+  title     String
+  message   String
+  data      Json             @default("{}")
+  read      Boolean          @default(false)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, read])
+  @@index([userId, createdAt])
+  @@map("notifications")
 }
 
 model ProcessingJob {

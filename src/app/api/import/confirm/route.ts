@@ -4,6 +4,7 @@ import { auth } from "@/lib/auth";
 import prisma from "@/lib/prisma";
 import { ColumnType, Prisma } from "@prisma/client";
 import { ImportResult } from "@/types/import";
+import { notifyImportComplete, notifyImportFailed } from "@/lib/notifications";
 
 // Validation schema
 const columnMappingSchema = z.object({
@@ -366,6 +367,15 @@ export async function POST(request: NextRequest) {
       rowsImported: importedRows,
     };
 
+    // Send notification for successful import
+    await notifyImportComplete(
+      userId,
+      config.tableName,
+      importedRows,
+      table.id,
+      projectId
+    ).catch(err => console.error("Failed to send import notification:", err));
+
     const response: ImportResult = {
       success: true,
       ...result,
@@ -374,6 +384,22 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(response);
   } catch (error) {
     console.error("Import confirmation error:", error);
+
+    // Get userId from session if available for notification
+    try {
+      const session = await auth();
+      if (session?.user?.id) {
+        const body = await request.clone().json().catch(() => ({}));
+        await notifyImportFailed(
+          session.user.id,
+          body?.tableName || "Unbekannt",
+          error instanceof Error ? error.message : "Unknown error"
+        ).catch(err => console.error("Failed to send import error notification:", err));
+      }
+    } catch {
+      // Ignore notification errors
+    }
+
     return NextResponse.json(
       {
         success: false,

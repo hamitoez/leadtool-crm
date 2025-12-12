@@ -1,17 +1,20 @@
 "use client";
 
-import React, { useCallback, useState, useEffect } from "react";
+import React, { useCallback, useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { DataTable } from "./data-table";
 import { RowDetailsSheet } from "./row-details-sheet";
 import { AIComplimentGenerator } from "./ai-compliment-generator";
 import { WebScraper, ScrapeResult } from "./web-scraper";
+import { KeyboardShortcutsDialog } from "./keyboard-shortcuts-dialog";
 import { useCellUpdate } from "@/hooks/use-cell-update";
+import { useTableShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { toast } from "sonner";
 import { RowData, ColumnConfig, CellValue, TableView, TableViewConfig } from "@/types/table";
 import { AddColumnDialog } from "./add-column-dialog";
+import { QuickAddDialog } from "./quick-add-dialog";
 import { Button } from "@/components/ui/button";
-import { Plus } from "lucide-react";
+import { Plus, PlusCircle } from "lucide-react";
 import { exportTable, getContactDataStats, ContactDataFilter, exportTableAdvanced, ExportDialogConfig } from "@/lib/export";
 import { ExportDialog, ExportConfig } from "./export-dialog";
 
@@ -43,6 +46,12 @@ export function TableViewClient({
 
   // Export Dialog state
   const [isExportDialogOpen, setIsExportDialogOpen] = useState(false);
+
+  // Keyboard Shortcuts Dialog state
+  const [isShortcutsDialogOpen, setIsShortcutsDialogOpen] = useState(false);
+
+  // Quick Add Dialog state (for keyboard shortcut)
+  const [isQuickAddOpen, setIsQuickAddOpen] = useState(false);
 
   // Saved Views state
   const [views, setViews] = useState<TableView[]>([]);
@@ -83,6 +92,14 @@ export function TableViewClient({
     debounceMs: 500,
   });
 
+  // Keyboard shortcuts
+  useTableShortcuts({
+    onNewRow: () => handleAddRow(),
+    onQuickAdd: () => setIsQuickAddOpen(true),
+    onExport: () => setIsExportDialogOpen(true),
+    onHelp: () => setIsShortcutsDialogOpen(true),
+  });
+
   const handleCellUpdate = useCallback(
     async (cellId: string, value: CellValue) => {
       await updateCell(cellId, value);
@@ -107,6 +124,56 @@ export function TableViewClient({
       );
     },
     [updateCell]
+  );
+
+  // Handle toggling favorite status
+  const handleToggleFavorite = useCallback(
+    async (rowId: string, isFavorite: boolean) => {
+      try {
+        const response = await fetch(`/api/tables/rows/${rowId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ isFavorite }),
+        });
+
+        if (!response.ok) throw new Error("Failed to update favorite");
+
+        // Optimistically update local state
+        setRows((prevRows) =>
+          prevRows.map((row) =>
+            row.id === rowId ? { ...row, isFavorite } : row
+          )
+        );
+      } catch {
+        toast.error("Fehler beim Aktualisieren des Favoriten");
+      }
+    },
+    []
+  );
+
+  // Handle updating notes
+  const handleUpdateNotes = useCallback(
+    async (rowId: string, notes: string | null) => {
+      try {
+        const response = await fetch(`/api/tables/rows/${rowId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ notes }),
+        });
+
+        if (!response.ok) throw new Error("Failed to update notes");
+
+        // Optimistically update local state
+        setRows((prevRows) =>
+          prevRows.map((row) =>
+            row.id === rowId ? { ...row, notes } : row
+          )
+        );
+      } catch {
+        toast.error("Fehler beim Speichern der Notiz");
+      }
+    },
+    []
   );
 
   const handleColumnReorder = useCallback(
@@ -599,6 +666,19 @@ export function TableViewClient({
     </AddColumnDialog>
   );
 
+  const quickAddButton = (
+    <QuickAddDialog
+      tableId={tableId}
+      columns={columns.map((c) => ({ id: c.id, name: c.name, type: c.type }))}
+      onLeadsAdded={handleRefresh}
+    >
+      <Button variant="outline" size="sm" className="h-9 bg-blue-50 hover:bg-blue-100 text-blue-700 dark:bg-blue-950 dark:hover:bg-blue-900 dark:text-blue-300 border-blue-200 dark:border-blue-800">
+        <PlusCircle className="h-4 w-4 mr-2" />
+        Quick Add
+      </Button>
+    </QuickAddDialog>
+  );
+
   return (
     <>
       <DataTable
@@ -617,6 +697,7 @@ export function TableViewClient({
         onExport={handleExport}
         onOpenExportDialog={handleOpenExportDialog}
         addColumnButton={addColumnButton}
+        quickAddButton={quickAddButton}
         contactDataStats={contactDataStats}
         enableVirtualization={false}
         enableColumnReordering={true}
@@ -626,6 +707,9 @@ export function TableViewClient({
         onGenerateCompliments={handleGenerateCompliments}
         // Web Scraper
         onScrapeWebsites={handleScrapeWebsites}
+        // Favorites & Notes
+        onToggleFavorite={handleToggleFavorite}
+        onUpdateNotes={handleUpdateNotes}
         // Saved Views
         views={views}
         currentViewId={currentViewId}
@@ -672,6 +756,21 @@ export function TableViewClient({
         columns={columns}
         tableName={tableName}
         onExport={handleExportFromDialog}
+      />
+
+      {/* Keyboard Shortcuts Dialog */}
+      <KeyboardShortcutsDialog
+        open={isShortcutsDialogOpen}
+        onOpenChange={setIsShortcutsDialogOpen}
+      />
+
+      {/* Quick Add Dialog (for keyboard shortcut) */}
+      <QuickAddDialog
+        tableId={tableId}
+        columns={columns.map((c) => ({ id: c.id, name: c.name, type: c.type }))}
+        onLeadsAdded={handleRefresh}
+        open={isQuickAddOpen}
+        onOpenChange={setIsQuickAddOpen}
       />
 
       {isUpdating && (

@@ -3,7 +3,7 @@ import { auth } from "@/lib/auth";
 import prisma from "@/lib/prisma";
 import { createProjectSchema } from "@/lib/validations/project";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
     const session = await auth();
 
@@ -14,6 +14,37 @@ export async function GET() {
       );
     }
 
+    const { searchParams } = new URL(request.url);
+    const search = searchParams.get("search");
+
+    // If search query is provided, include tables for search results
+    if (search) {
+      const projects = await prisma.project.findMany({
+        where: {
+          userId: session.user.id,
+        },
+        include: {
+          tables: {
+            select: {
+              id: true,
+              name: true,
+            },
+          },
+          _count: {
+            select: {
+              tables: true,
+            },
+          },
+        },
+        orderBy: {
+          updatedAt: "desc",
+        },
+      });
+
+      return NextResponse.json(projects);
+    }
+
+    // Default: return projects without tables
     const projects = await prisma.project.findMany({
       where: {
         userId: session.user.id,

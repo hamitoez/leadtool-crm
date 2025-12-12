@@ -4,6 +4,7 @@ import { z } from "zod";
 import prisma from "@/lib/prisma";
 import { verifyRowAccess } from "@/lib/security/authorization";
 import { decrypt } from "@/lib/security/encryption";
+import { notifyScrapingComplete, notifyScrapingFailed } from "@/lib/notifications";
 
 // Scraper service URL
 const SCRAPER_URL = process.env.SCRAPER_URL || "http://127.0.0.1:8765";
@@ -103,6 +104,24 @@ export async function POST(request: NextRequest) {
     // If rowId and columnMappings provided, update cells (already verified access)
     if (rowId && columnMappings && result.success) {
       await updateCellsWithScrapeResult(rowId, result, columnMappings as Record<string, string>);
+    }
+
+    // Send notification for single scrape
+    if (result.success) {
+      const contactCount = (result.emails?.length || 0) + (result.phones?.length || 0) + (result.persons?.length || 0);
+      if (contactCount > 0) {
+        await notifyScrapingComplete(
+          userId,
+          new URL(url).hostname,
+          contactCount
+        ).catch(err => console.error("Failed to send scrape notification:", err));
+      }
+    } else if (result.error) {
+      await notifyScrapingFailed(
+        userId,
+        new URL(url).hostname,
+        result.error
+      ).catch(err => console.error("Failed to send scrape error notification:", err));
     }
 
     return NextResponse.json({

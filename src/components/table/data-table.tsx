@@ -45,8 +45,9 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { MoreHorizontal, Trash2 } from "lucide-react";
+import { MoreHorizontal, Trash2, Star } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
+import { RowNotesPopover } from "./row-notes-popover";
 
 // Constants for Excel-like appearance
 const DEFAULT_COLUMN_WIDTH = 150;
@@ -69,6 +70,7 @@ interface DataTableProps {
   onExport?: (format: "csv" | "json", contactFilter?: ContactDataFilter) => void;
   onOpenExportDialog?: () => void;
   addColumnButton?: React.ReactNode;
+  quickAddButton?: React.ReactNode;
   contactDataStats?: {
     total: number;
     withContact: number;
@@ -80,6 +82,10 @@ interface DataTableProps {
   pageSize?: number;
   onGenerateCompliments?: (selectedRows: TableRowData[]) => void;
   onScrapeWebsites?: (selectedRows: TableRowData[]) => void;
+  // Favorites & Notes
+  onToggleFavorite?: (rowId: string, isFavorite: boolean) => Promise<void>;
+  onUpdateNotes?: (rowId: string, notes: string | null) => Promise<void>;
+  // Views
   views?: TableView[];
   currentViewId?: string;
   onViewSelect?: (view: TableView) => void;
@@ -164,6 +170,7 @@ export function DataTable({
   onExport,
   onOpenExportDialog,
   addColumnButton,
+  quickAddButton,
   contactDataStats,
   enableVirtualization = false, // Disabled by default for simpler rendering
   enableColumnReordering = true,
@@ -171,6 +178,8 @@ export function DataTable({
   pageSize = 30,
   onGenerateCompliments,
   onScrapeWebsites,
+  onToggleFavorite,
+  onUpdateNotes,
   views = [],
   currentViewId,
   onViewSelect,
@@ -257,6 +266,78 @@ export function DataTable({
         enableHiding: false,
       };
       allColumns.push(selectionColumn);
+    }
+
+    // Favorites column
+    if (onToggleFavorite) {
+      const favoritesColumn: ColumnDef<TableRowData> = {
+        id: "_favorite",
+        header: () => (
+          <div className="flex items-center justify-center">
+            <Star className="h-4 w-4 text-muted-foreground" />
+          </div>
+        ),
+        cell: ({ row }) => (
+          <div className="flex items-center justify-center h-full">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 w-7 p-0 hover:bg-amber-100 dark:hover:bg-amber-900/30"
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleFavorite(row.original.id, !row.original.isFavorite);
+              }}
+            >
+              <Star
+                className={cn(
+                  "h-4 w-4 transition-colors",
+                  row.original.isFavorite
+                    ? "fill-amber-400 text-amber-400"
+                    : "text-muted-foreground hover:text-amber-400"
+                )}
+              />
+            </Button>
+          </div>
+        ),
+        size: 40,
+        minSize: 40,
+        maxSize: 40,
+        enableResizing: false,
+        enableSorting: false,
+        enableHiding: false,
+      };
+      allColumns.push(favoritesColumn);
+    }
+
+    // Notes column
+    if (onUpdateNotes) {
+      const notesColumn: ColumnDef<TableRowData> = {
+        id: "_notes",
+        header: () => (
+          <div className="flex items-center justify-center text-xs text-muted-foreground">
+            Notes
+          </div>
+        ),
+        cell: ({ row }) => (
+          <div
+            className="flex items-center justify-center h-full"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <RowNotesPopover
+              rowId={row.original.id}
+              notes={row.original.notes}
+              onNotesChange={onUpdateNotes}
+            />
+          </div>
+        ),
+        size: 50,
+        minSize: 50,
+        maxSize: 50,
+        enableResizing: false,
+        enableSorting: false,
+        enableHiding: false,
+      };
+      allColumns.push(notesColumn);
     }
 
     // Data columns
@@ -471,6 +552,7 @@ export function DataTable({
         table={table}
         onAddRow={onAddRow}
         addColumnButton={addColumnButton}
+        quickAddButton={quickAddButton}
         globalFilter={globalFilter}
         onGlobalFilterChange={setGlobalFilter}
         onExport={onExport}

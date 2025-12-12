@@ -8,6 +8,8 @@ type Params = Promise<{ rowId: string }>;
 // Validation schema for row updates
 const updateRowSchema = z.object({
   position: z.number().min(0).optional(),
+  isFavorite: z.boolean().optional(),
+  notes: z.string().nullable().optional(),
 });
 
 // GET - Get row details
@@ -60,6 +62,8 @@ export async function GET(
       row: {
         id: row.id,
         position: row.position,
+        isFavorite: row.isFavorite,
+        notes: row.notes,
         cells: row.cells.reduce(
           (acc, cell) => {
             acc[cell.columnId] = {
@@ -179,6 +183,8 @@ export async function PATCH(
       where: { id: rowId },
       data: {
         ...(updates.position !== undefined && { position: updates.position }),
+        ...(updates.isFavorite !== undefined && { isFavorite: updates.isFavorite }),
+        ...(updates.notes !== undefined && { notes: updates.notes }),
       },
     });
 
@@ -186,6 +192,8 @@ export async function PATCH(
       row: {
         id: updatedRow.id,
         position: updatedRow.position,
+        isFavorite: updatedRow.isFavorite,
+        notes: updatedRow.notes,
         updatedAt: updatedRow.updatedAt,
       },
       success: true,

@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { signIn } from "next-auth/react";
 import Link from "next/link";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -27,6 +26,8 @@ import {
 } from "@/components/ui/form";
 import { Table2, Loader2 } from "lucide-react";
 import { toast } from "sonner";
+import { signIn } from "next-auth/react";
+import { GoogleIcon, GitHubIcon } from "@/components/ui/icons";
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -59,28 +60,21 @@ export default function RegisterPage() {
       const result = await response.json();
 
       if (!response.ok) {
-        toast.error(result.error || "Registration failed");
+        // Handle unverified email case
+        if (result.code === "EMAIL_EXISTS_UNVERIFIED") {
+          toast.error(result.error);
+          router.push(`/verify-email?email=${encodeURIComponent(data.email)}`);
+          return;
+        }
+        toast.error(result.error || "Registrierung fehlgeschlagen");
         return;
       }
 
-      // Auto-login after registration
-      const signInResult = await signIn("credentials", {
-        email: data.email,
-        password: data.password,
-        redirect: false,
-      });
-
-      if (signInResult?.error) {
-        toast.error("Account created but login failed. Please try logging in.");
-        router.push("/login");
-        return;
-      }
-
-      toast.success("Account created successfully!");
-      router.push("/dashboard");
-      router.refresh();
+      // Redirect to verify-email page instead of auto-login
+      toast.success("Registrierung erfolgreich! Bitte bestätige deine E-Mail-Adresse.");
+      router.push(`/verify-email?email=${encodeURIComponent(data.email)}`);
     } catch {
-      toast.error("Something went wrong. Please try again.");
+      toast.error("Ein Fehler ist aufgetreten. Bitte versuche es erneut.");
     } finally {
       setIsLoading(false);
     }
@@ -92,9 +86,9 @@ export default function RegisterPage() {
         <div className="flex justify-center">
           <Table2 className="h-10 w-10 text-primary" />
         </div>
-        <CardTitle className="text-2xl">Create an account</CardTitle>
+        <CardTitle className="text-2xl">Konto erstellen</CardTitle>
         <CardDescription>
-          Enter your details to get started with LeadTool
+          Gib deine Daten ein, um mit Performanty zu starten
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -107,7 +101,7 @@ export default function RegisterPage() {
                 <FormItem>
                   <FormLabel>Name (optional)</FormLabel>
                   <FormControl>
-                    <Input placeholder="John Doe" {...field} />
+                    <Input placeholder="Max Mustermann" {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -118,7 +112,7 @@ export default function RegisterPage() {
               name="email"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Email</FormLabel>
+                  <FormLabel>E-Mail</FormLabel>
                   <FormControl>
                     <Input
                       type="email"
@@ -135,7 +129,7 @@ export default function RegisterPage() {
               name="password"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Password</FormLabel>
+                  <FormLabel>Passwort</FormLabel>
                   <FormControl>
                     <Input type="password" placeholder="••••••••" {...field} />
                   </FormControl>
@@ -148,7 +142,7 @@ export default function RegisterPage() {
               name="confirmPassword"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Confirm Password</FormLabel>
+                  <FormLabel>Passwort bestätigen</FormLabel>
                   <FormControl>
                     <Input type="password" placeholder="••••••••" {...field} />
                   </FormControl>
@@ -158,19 +152,53 @@ export default function RegisterPage() {
             />
             <Button type="submit" className="w-full" disabled={isLoading}>
               {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Create Account
+              Konto erstellen
             </Button>
           </form>
         </Form>
+
+        {/* OAuth Buttons - Aktivieren wenn GOOGLE_CLIENT_ID und GITHUB_CLIENT_ID gesetzt sind */}
+        {/*
+        <div className="relative my-4">
+          <div className="absolute inset-0 flex items-center">
+            <span className="w-full border-t" />
+          </div>
+          <div className="relative flex justify-center text-xs uppercase">
+            <span className="bg-card px-2 text-muted-foreground">
+              Oder registrieren mit
+            </span>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <Button
+            variant="outline"
+            type="button"
+            disabled={isLoading}
+            onClick={() => signIn("google", { callbackUrl: "/dashboard" })}
+          >
+            <GoogleIcon className="mr-2 h-4 w-4" />
+            Google
+          </Button>
+          <Button
+            variant="outline"
+            type="button"
+            disabled={isLoading}
+            onClick={() => signIn("github", { callbackUrl: "/dashboard" })}
+          >
+            <GitHubIcon className="mr-2 h-4 w-4" />
+            GitHub
+          </Button>
+        </div>
+        */}
       </CardContent>
       <CardFooter className="flex flex-col space-y-2">
         <p className="text-center text-sm text-muted-foreground">
-          Already have an account?{" "}
+          Bereits ein Konto?{" "}
           <Link
             href="/login"
             className="font-medium text-primary hover:underline"
           >
-            Sign in
+            Anmelden
           </Link>
         </p>
       </CardFooter>

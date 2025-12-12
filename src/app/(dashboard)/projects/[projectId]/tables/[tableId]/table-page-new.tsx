@@ -86,6 +86,8 @@ export default async function TableViewPageNew({ params }: TableViewPageProps) {
   const formattedRows: RowData[] = rows.map((row) => ({
     id: row.id,
     position: row.position,
+    isFavorite: row.isFavorite,
+    notes: row.notes,
     cells: row.cells.reduce(
       (acc, cell) => {
         acc[cell.columnId] = {

@@ -15,7 +15,7 @@ import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { Download, FileSpreadsheet, FileJson, Users, UserX, Filter } from "lucide-react";
+import { Download, FileSpreadsheet, FileJson, Users, UserX, Filter, FileText } from "lucide-react";
 import { RowData, ColumnConfig } from "@/types/table";
 import {
   CONTACT_FIELDS,
@@ -27,7 +27,7 @@ import {
 export type ExportFilterMode = "all" | "with-selected" | "without-selected";
 
 export interface ExportConfig {
-  format: "csv" | "json";
+  format: "csv" | "json" | "xlsx";
   filterMode: ExportFilterMode;
   selectedFields: string[];
   requireAll: boolean;
@@ -50,7 +50,7 @@ export function ExportDialog({
   tableName,
   onExport,
 }: ExportDialogProps) {
-  const [format, setFormat] = useState<"csv" | "json">("csv");
+  const [format, setFormat] = useState<"csv" | "json" | "xlsx">("xlsx");
   const [filterMode, setFilterMode] = useState<ExportFilterMode>("all");
   const [selectedFields, setSelectedFields] = useState<string[]>(["email", "phone"]);
   const [requireAll, setRequireAll] = useState(false);
@@ -138,13 +138,20 @@ export function ExportDialog({
             <Label className="text-sm font-medium">Format</Label>
             <RadioGroup
               value={format}
-              onValueChange={(v) => setFormat(v as "csv" | "json")}
+              onValueChange={(v) => setFormat(v as "csv" | "json" | "xlsx")}
               className="flex gap-4"
             >
               <div className="flex items-center space-x-2">
+                <RadioGroupItem value="xlsx" id="xlsx" />
+                <Label htmlFor="xlsx" className="flex items-center gap-2 cursor-pointer">
+                  <FileSpreadsheet className="h-4 w-4 text-green-600" />
+                  Excel
+                </Label>
+              </div>
+              <div className="flex items-center space-x-2">
                 <RadioGroupItem value="csv" id="csv" />
                 <Label htmlFor="csv" className="flex items-center gap-2 cursor-pointer">
-                  <FileSpreadsheet className="h-4 w-4" />
+                  <FileText className="h-4 w-4" />
                   CSV
                 </Label>
               </div>

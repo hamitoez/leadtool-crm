@@ -68,7 +68,14 @@
       "Bash(pm2 delete:*)",
       "Bash(git pull:*)",
       "Bash(git fetch:*)",
-      "Bash(python -m pytest:*)"
+      "Bash(python -m pytest:*)",
+      "Bash(ping:*)",
+      "Bash(certbot:*)",
+      "Bash(apt update:*)",
+      "Bash(apt install:*)",
+      "Bash(pm2 show:*)",
+      "Bash(npx @sentry/wizard@latest -i nextjs:*)",
+      "Bash(pm2 stop:*)"
     ],
     "deny": [],
     "ask": []

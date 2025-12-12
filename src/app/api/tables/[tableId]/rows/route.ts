@@ -69,6 +69,8 @@ export async function GET(
     const formattedRows = rows.map((row) => ({
       id: row.id,
       position: row.position,
+      isFavorite: row.isFavorite,
+      notes: row.notes,
       cells: row.cells.reduce(
         (acc, cell) => {
           acc[cell.columnId] = {
@@ -171,6 +173,8 @@ export async function POST(
     const formattedRow = {
       id: row.id,
       position: row.position,
+      isFavorite: row.isFavorite,
+      notes: row.notes,
       cells: row.cells.reduce(
         (acc, cell) => {
           acc[cell.columnId] = {

@@ -1,10 +1,10 @@
 #!/bin/bash
 # Start the Impressum Scraper Service
 
-cd /var/www/leadtool/scraper
+cd /var/www/leadtool
 
 # Activate virtual environment
-source venv/bin/activate
+source scraper/venv/bin/activate
 
 # Set environment variables if not set
 export SCRAPER_HOST="${SCRAPER_HOST:-127.0.0.1}"
