@@ -6,16 +6,26 @@ import { verifyRowAccess } from "@/lib/security/authorization";
 import { decrypt } from "@/lib/security/encryption";
 import { notifyScrapingComplete, notifyScrapingFailed } from "@/lib/notifications";
 
-// Scraper service URL
-const SCRAPER_URL = process.env.SCRAPER_URL || "http://127.0.0.1:8765";
+// Import our new Node.js scraper
+import {
+  scrape,
+  scrapeMany,
+  scrapeAndExtractContacts,
+  type ContactExtractionResult,
+} from "@/lib/scraper";
 
 // Validation schemas
 const singleScrapeSchema = z.object({
   url: z.string().url(),
-  apiKey: z.string().optional(),
+  // LLM options
+  useLLM: z.boolean().default(true),
+  discoverContactPages: z.boolean().default(true),
   // Optional: Update cells directly
   rowId: z.string().optional(),
   columnMappings: z.record(z.string(), z.string()).optional(),
+  // Advanced options
+  timeout: z.number().min(5000).max(120000).default(30000),
+  formats: z.array(z.enum(['markdown', 'html', 'rawHtml', 'links', 'screenshot'])).optional(),
 });
 
 const bulkScrapeSchema = z.object({
@@ -23,9 +33,11 @@ const bulkScrapeSchema = z.object({
     url: z.string().url(),
     rowId: z.string().optional(),
   })),
-  apiKey: z.string().optional(),
+  useLLM: z.boolean().default(true),
+  discoverContactPages: z.boolean().default(true),
   columnMappings: z.record(z.string(), z.string()).optional(),
-  maxConcurrent: z.number().min(1).max(200).default(100),
+  maxConcurrent: z.number().min(1).max(50).default(10),
+  timeout: z.number().min(5000).max(120000).default(30000),
 });
 
 interface ScrapeResult {
@@ -34,17 +46,20 @@ interface ScrapeResult {
   emails: string[];
   phones: string[];
   addresses: string[];
-  social: Record<string, string>;
+  social: Record<string, string | undefined>;
   persons: Array<{ name?: string; position?: string; email?: string; phone?: string }>;
   pages_scraped: string[];
   error?: string;
   firstName?: string;
   lastName?: string;
+  companyName?: string;
+  confidence?: number;
+  markdown?: string;
 }
 
 /**
  * POST /api/scrape
- * Scrape a website for contact information
+ * Scrape a website for contact information using Node.js scraper
  */
 export async function POST(request: NextRequest) {
   try {
@@ -67,11 +82,13 @@ export async function POST(request: NextRequest) {
       ? decrypt(userSettings.aiApiKey)
       : null;
 
+    const aiProvider = (userSettings?.aiProvider || 'openai') as 'openai' | 'anthropic' | 'ollama';
+
     const body = await request.json();
 
     // Check if it's a bulk request
     if (body.urls && Array.isArray(body.urls)) {
-      return handleBulkScrape(body, userId, decryptedApiKey || body.apiKey);
+      return handleBulkScrape(body, userId, decryptedApiKey, aiProvider);
     }
 
     // Single scrape
@@ -83,14 +100,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { url, apiKey, rowId, columnMappings } = validation.data;
-    const effectiveApiKey = decryptedApiKey || apiKey;
+    const { url, useLLM, discoverContactPages, rowId, columnMappings, timeout } = validation.data;
 
     // SECURITY: Verify user owns the row before updating cells
     if (rowId) {
       try {
         await verifyRowAccess(rowId, userId);
-      } catch (error) {
+      } catch {
         return NextResponse.json(
           { error: "Access denied to this row" },
           { status: 403 }
@@ -98,8 +114,14 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Call scraper service
-    const result = await callScraperService(url, effectiveApiKey);
+    // Scrape using our Node.js scraper
+    const result = await scrapeWithNodeScraper(url, {
+      useLLM: useLLM && !!decryptedApiKey,
+      discoverContactPages,
+      llmProvider: aiProvider,
+      llmApiKey: decryptedApiKey || undefined,
+      timeout,
+    });
 
     // If rowId and columnMappings provided, update cells (already verified access)
     if (rowId && columnMappings && result.success) {
@@ -142,9 +164,97 @@ export async function POST(request: NextRequest) {
 }
 
 /**
+ * Scrape using our Node.js scraper
+ */
+async function scrapeWithNodeScraper(
+  url: string,
+  options: {
+    useLLM: boolean;
+    discoverContactPages: boolean;
+    llmProvider?: 'openai' | 'anthropic' | 'ollama';
+    llmApiKey?: string;
+    timeout?: number;
+  }
+): Promise<ScrapeResult> {
+  try {
+    // Use contact extraction for CRM use case
+    const result: ContactExtractionResult = await scrapeAndExtractContacts(url, {
+      llmProvider: options.useLLM ? options.llmProvider : undefined,
+      llmApiKey: options.useLLM ? options.llmApiKey : undefined,
+      timeout: options.timeout,
+      discoverContactPages: options.discoverContactPages,
+    });
+
+    if (!result.success || !result.data) {
+      return {
+        success: false,
+        url,
+        emails: [],
+        phones: [],
+        addresses: [],
+        social: {},
+        persons: [],
+        pages_scraped: result.pagesScraped,
+        error: result.error,
+      };
+    }
+
+    // Parse first/last name from first contact person
+    let firstName: string | undefined;
+    let lastName: string | undefined;
+    if (result.data.contactPersons.length > 0) {
+      const name = result.data.contactPersons[0].name;
+      if (name) {
+        const parts = name.trim().split(/\s+/);
+        firstName = parts[0];
+        lastName = parts.slice(1).join(" ") || undefined;
+      }
+    }
+
+    return {
+      success: true,
+      url,
+      emails: result.data.emails,
+      phones: result.data.phones,
+      addresses: result.data.addresses,
+      social: result.data.socialLinks,
+      persons: result.data.contactPersons.map(p => ({
+        name: p.name,
+        position: p.position,
+        email: p.email,
+        phone: p.phone,
+      })),
+      pages_scraped: result.pagesScraped,
+      firstName,
+      lastName,
+      companyName: result.data.companyName,
+      confidence: result.confidence,
+    };
+
+  } catch (error) {
+    return {
+      success: false,
+      url,
+      emails: [],
+      phones: [],
+      addresses: [],
+      social: {},
+      persons: [],
+      pages_scraped: [],
+      error: error instanceof Error ? error.message : "Unknown error",
+    };
+  }
+}
+
+/**
  * Handle bulk scraping
  */
-async function handleBulkScrape(body: unknown, userId: string, apiKey?: string | null) {
+async function handleBulkScrape(
+  body: unknown,
+  userId: string,
+  apiKey: string | null,
+  aiProvider: 'openai' | 'anthropic' | 'ollama'
+) {
   const validation = bulkScrapeSchema.safeParse(body);
   if (!validation.success) {
     return NextResponse.json(
@@ -153,13 +263,12 @@ async function handleBulkScrape(body: unknown, userId: string, apiKey?: string |
     );
   }
 
-  const { urls, maxConcurrent } = validation.data;
+  const { urls, useLLM, discoverContactPages, columnMappings, maxConcurrent, timeout } = validation.data;
 
   // SECURITY: Verify user owns all rows before processing
   const rowIds = urls.filter(u => u.rowId).map(u => u.rowId as string);
   if (rowIds.length > 0) {
     try {
-      // Verify all rows belong to user in a single query
       const rows = await prisma.row.findMany({
         where: {
           id: { in: rowIds },
@@ -176,7 +285,6 @@ async function handleBulkScrape(body: unknown, userId: string, apiKey?: string |
         },
       });
 
-      // Check all rows belong to this user
       for (const row of rows) {
         if (row.table.project.userId !== userId) {
           return NextResponse.json(
@@ -186,7 +294,6 @@ async function handleBulkScrape(body: unknown, userId: string, apiKey?: string |
         }
       }
 
-      // Check we found all requested rows
       if (rows.length !== rowIds.length) {
         return NextResponse.json(
           { error: "One or more rows not found" },
@@ -202,67 +309,60 @@ async function handleBulkScrape(body: unknown, userId: string, apiKey?: string |
     }
   }
 
-  // Call bulk scraper service
-  const response = await fetch(`${SCRAPER_URL}/scrape/bulk`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      urls: urls.map(u => u.url),
-      api_key: apiKey,
-      max_concurrent: maxConcurrent,
-    }),
-  });
+  // Process URLs in batches using our Node.js scraper
+  const results: ScrapeResult[] = [];
+  const urlList = urls.map(u => u.url);
 
-  if (!response.ok) {
-    const error = await response.text();
-    return NextResponse.json(
-      { error: "Bulk scraping failed", message: error },
-      { status: 500 }
+  // Process in batches
+  for (let i = 0; i < urlList.length; i += maxConcurrent) {
+    const batch = urlList.slice(i, i + maxConcurrent);
+    const batchUrls = urls.slice(i, i + maxConcurrent);
+
+    const batchPromises = batch.map((url, idx) =>
+      scrapeWithNodeScraper(url, {
+        useLLM: useLLM && !!apiKey,
+        discoverContactPages,
+        llmProvider: aiProvider,
+        llmApiKey: apiKey || undefined,
+        timeout,
+      }).then(async (result) => {
+        // Update cells if rowId provided
+        const rowId = batchUrls[idx].rowId;
+        if (rowId && columnMappings && result.success) {
+          await updateCellsWithScrapeResult(rowId, result, columnMappings);
+        }
+        return result;
+      })
     );
+
+    const batchResults = await Promise.all(batchPromises);
+    results.push(...batchResults);
   }
 
-  const jobData = await response.json();
+  // Calculate summary
+  const successful = results.filter(r => r.success).length;
+  const failed = results.filter(r => !r.success).length;
+  const totalContacts = results.reduce((sum, r) =>
+    sum + (r.emails?.length || 0) + (r.phones?.length || 0), 0
+  );
+
+  // Send notification
+  if (successful > 0) {
+    await notifyScrapingComplete(
+      userId,
+      `${successful} websites`,
+      totalContacts
+    ).catch(err => console.error("Failed to send bulk scrape notification:", err));
+  }
 
   return NextResponse.json({
     success: true,
-    jobId: jobData.job_id,
-    status: jobData.status,
-    total: jobData.total,
-    maxConcurrent: jobData.max_concurrent,
+    total: urls.length,
+    successful,
+    failed,
+    totalContacts,
+    results,
   });
-}
-
-/**
- * Call the Python scraper service
- */
-async function callScraperService(
-  url: string,
-  apiKey?: string | null,
-): Promise<ScrapeResult> {
-  try {
-    const response = await fetch(`${SCRAPER_URL}/scrape`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        url,
-        api_key: apiKey,
-      }),
-    });
-
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`Scraper service error: ${error}`);
-    }
-
-    const data = await response.json();
-    return data.data || data;
-
-  } catch (error) {
-    if (error instanceof TypeError && error.message.includes("fetch")) {
-      throw new Error("Scraper service is not running. Start with: cd scraper && python -m scraper.server");
-    }
-    throw error;
-  }
 }
 
 /**
@@ -300,6 +400,11 @@ async function updateCellsWithScrapeResult(
     updates.push({ columnId: columnMappings.address, value: result.addresses[0] });
   }
 
+  // Map company name
+  if (columnMappings.companyName && result.companyName) {
+    updates.push({ columnId: columnMappings.companyName, value: result.companyName });
+  }
+
   // Person data fallback
   if (result.persons.length > 0) {
     const person = result.persons[0];
@@ -325,6 +430,22 @@ async function updateCellsWithScrapeResult(
     }
   }
 
+  // Social links
+  if (columnMappings.linkedin && result.social?.linkedin) {
+    updates.push({ columnId: columnMappings.linkedin, value: result.social.linkedin });
+  }
+  if (columnMappings.twitter && result.social?.twitter) {
+    updates.push({ columnId: columnMappings.twitter, value: result.social.twitter });
+  }
+  if (columnMappings.facebook && result.social?.facebook) {
+    updates.push({ columnId: columnMappings.facebook, value: result.social.facebook });
+  }
+  if (columnMappings.xing && result.social?.xing) {
+    updates.push({ columnId: columnMappings.xing, value: result.social.xing });
+  }
+
+  if (updates.length === 0) return;
+
   // Update cells in database using transaction for consistency
   await prisma.$transaction(
     updates.map(update =>
@@ -336,9 +457,10 @@ async function updateCellsWithScrapeResult(
         data: {
           value: update.value,
           metadata: {
-            source: "web_scrape",
+            source: "node_scraper",
             scrapedAt: new Date().toISOString(),
             sourceUrl: result.url,
+            confidence: result.confidence,
           },
         },
       })
@@ -348,31 +470,21 @@ async function updateCellsWithScrapeResult(
 
 /**
  * GET /api/scrape
- * Check if scraper service is running
+ * Health check for scraper
  */
 export async function GET() {
-  try {
-    const response = await fetch(`${SCRAPER_URL}/health`);
-
-    if (!response.ok) {
-      return NextResponse.json({
-        status: "error",
-        message: "Scraper service is not responding",
-      }, { status: 503 });
-    }
-
-    const health = await response.json();
-
-    return NextResponse.json({
-      status: "ok",
-      scraperService: health,
-    });
-
-  } catch {
-    return NextResponse.json({
-      status: "error",
-      message: "Scraper service is not running",
-      hint: "Start with: cd scraper && python -m scraper.server",
-    }, { status: 503 });
-  }
+  return NextResponse.json({
+    status: "ok",
+    scraper: "node.js",
+    version: "1.0.0",
+    features: [
+      "single-url-scrape",
+      "bulk-scrape",
+      "contact-extraction",
+      "llm-extraction",
+      "markdown-conversion",
+      "screenshot",
+    ],
+    engines: ["playwright", "fetch"],
+  });
 }
