@@ -206,6 +206,7 @@ export default function LoginPage() {
               onChange={(e) => setTotpCode(e.target.value.replace(/[^0-9A-Za-z-]/g, "").slice(0, 10))}
               maxLength={10}
               className="text-center text-2xl tracking-widest"
+              autoComplete="one-time-code"
               autoFocus
             />
             <p className="text-xs text-center text-muted-foreground">
@@ -295,6 +296,7 @@ export default function LoginPage() {
                     <Input
                       type="email"
                       placeholder="name@example.com"
+                      autoComplete="email"
                       {...field}
                     />
                   </FormControl>
@@ -317,7 +319,7 @@ export default function LoginPage() {
                     </Link>
                   </div>
                   <FormControl>
-                    <Input type="password" placeholder="••••••••" {...field} />
+                    <Input type="password" placeholder="••••••••" autoComplete="current-password" {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>

@@ -416,9 +416,26 @@ class GermanImpressumParser(ParserStrategy):
                     if len(first_name) < 2 or len(last_name) < 2:
                         continue
 
-                    # Skip common false positives (German articles and prepositions)
-                    false_positives = ["der", "die", "das", "und", "für", "mit", "bei", "von", "zur"]
-                    if first_name.lower() in false_positives:
+                    # Skip common false positives
+                    # German articles, prepositions, call-to-action words, page titles, etc.
+                    false_positives = [
+                        # Articles and prepositions
+                        "der", "die", "das", "und", "für", "mit", "bei", "von", "zur", "zum",
+                        # Call-to-action words (common false names)
+                        "rufen", "schreiben", "kontaktieren", "besuchen", "klicken", "senden",
+                        "füllen", "absenden", "anrufen", "hier", "jetzt", "mehr",
+                        # Pronouns
+                        "sie", "wir", "ihr", "uns", "ihnen",
+                        # Page titles and navigation
+                        "impressum", "kontakt", "datenschutz", "startseite", "home", "über",
+                        # Business terms (often mistaken as names)
+                        "firmenwortlaut", "unternehmensgegenstand", "firmenbuchgericht",
+                        "geschäftsführer", "gesellschafter", "inhaber", "rechtsanwalt",
+                        "kanzlei", "standort", "standorte", "zentrale", "filiale",
+                        # Other common false positives
+                        "alle", "rechte", "vorbehalten", "teilen", "share",
+                    ]
+                    if first_name.lower() in false_positives or last_name.lower() in false_positives:
                         continue
 
                     key = f"{first_name.lower()}_{last_name.lower()}"

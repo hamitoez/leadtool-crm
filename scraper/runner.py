@@ -207,7 +207,7 @@ class ImpressumScraper:
                 )
                 extraction_method = "llm"
 
-            # Fallback to regex-only extraction
+            # Fallback to regex-only extraction (email/phone only - NO names without LLM)
             if not contact and (parsed["emails"] or parsed["phones"]):
                 contact = ContactInfo(
                     email=parsed["emails"][0] if parsed["emails"] else None,
@@ -215,12 +215,8 @@ class ImpressumScraper:
                     address=parsed["address"],
                     confidence=0.3,
                 )
-
-                # Try to add name from parsed data
-                if parsed["names"]:
-                    contact.first_name = parsed["names"][0].get("first_name")
-                    contact.last_name = parsed["names"][0].get("last_name")
-                    contact.confidence = 0.5
+                # NOTE: Regex-based name extraction disabled - produces garbage without LLM
+                # Names are only extracted when LLM (OpenAI API key) is configured
 
             duration_ms = int((time.monotonic() - start_time) * 1000)
 

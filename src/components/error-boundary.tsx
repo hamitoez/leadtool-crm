@@ -1,6 +1,5 @@
 "use client";
 
-import * as Sentry from "@sentry/nextjs";
 import React from "react";
 import { Button } from "@/components/ui/button";
 import {
@@ -37,12 +36,7 @@ export class ErrorBoundary extends React.Component<
   }
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
-    Sentry.withScope((scope) => {
-      scope.setExtras({
-        componentStack: errorInfo.componentStack,
-      });
-      Sentry.captureException(error);
-    });
+    console.error("ErrorBoundary caught error:", error, errorInfo);
   }
 
   handleReset = () => {

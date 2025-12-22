@@ -101,7 +101,7 @@ export default function RegisterPage() {
                 <FormItem>
                   <FormLabel>Name (optional)</FormLabel>
                   <FormControl>
-                    <Input placeholder="Max Mustermann" {...field} />
+                    <Input placeholder="Max Mustermann" autoComplete="name" {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -117,6 +117,7 @@ export default function RegisterPage() {
                     <Input
                       type="email"
                       placeholder="name@example.com"
+                      autoComplete="email"
                       {...field}
                     />
                   </FormControl>
@@ -131,7 +132,7 @@ export default function RegisterPage() {
                 <FormItem>
                   <FormLabel>Passwort</FormLabel>
                   <FormControl>
-                    <Input type="password" placeholder="••••••••" {...field} />
+                    <Input type="password" placeholder="••••••••" autoComplete="new-password" {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -144,7 +145,7 @@ export default function RegisterPage() {
                 <FormItem>
                   <FormLabel>Passwort bestätigen</FormLabel>
                   <FormControl>
-                    <Input type="password" placeholder="••••••••" {...field} />
+                    <Input type="password" placeholder="••••••••" autoComplete="new-password" {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>

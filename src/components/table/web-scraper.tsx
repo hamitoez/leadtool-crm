@@ -59,6 +59,8 @@ export interface ScrapeResult {
   error?: string;
   firstName?: string;
   lastName?: string;
+  pages_scraped?: string[];
+  confidence?: number;
 }
 
 interface ColumnMapping {
@@ -235,7 +237,10 @@ export function WebScraper({
   // Bulk scraping
   const handleBulkScraping = async () => {
     try {
-      const startResponse = await fetch("/api/scrape", {
+      toast.info(`${urlsToScrape.length} URLs werden gescraped (${maxConcurrent} gleichzeitig)...`);
+      setCurrentUrl(`0/${urlsToScrape.length} URLs verarbeitet`);
+
+      const response = await fetch("/api/scrape", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -246,79 +251,46 @@ export function WebScraper({
         }),
       });
 
-      const startData = await startResponse.json();
+      const data = await response.json();
 
-      if (!startData.success || !startData.jobId) {
-        toast.error(startData.error || "Fehler beim Starten des Scraping-Jobs");
+      if (!response.ok || !data.success) {
+        toast.error(data.error || "Fehler beim Scraping");
         setIsScraping(false);
         return;
       }
 
-      setJobId(startData.jobId);
-      toast.info(`${urlsToScrape.length} URLs werden parallel gescraped (${maxConcurrent} gleichzeitig)...`);
-
-      // Poll for progress
-      const pollInterval = setInterval(async () => {
-        try {
-          const statusResponse = await fetch(`/api/scrape/job/${startData.jobId}`, {
-            credentials: "include",
-          });
-
-          if (!statusResponse.ok) {
-            clearInterval(pollInterval);
-            setIsScraping(false);
-            return;
+      // Process results
+      const newResults = new Map<string, ScrapeResult>();
+      if (data.results && Array.isArray(data.results)) {
+        data.results.forEach((result: ScrapeResult) => {
+          const urlEntry = urlsToScrape.find(u => u.url === result.url);
+          if (urlEntry) {
+            newResults.set(urlEntry.rowId, result);
           }
+        });
+      }
 
-          const status = await statusResponse.json();
+      setResults(newResults);
+      setProgress(100);
+      setCurrentUrl("");
+      setIsScraping(false);
 
-          setProgress(status.progress || 0);
-          setCurrentUrl(`${status.completed}/${status.total} URLs verarbeitet`);
+      const successCount = data.successful || 0;
+      const withNames = data.withNames || 0;
+      const withoutNames = data.withoutNames || 0;
 
-          // Update results
-          if (status.results && status.results.length > 0) {
-            const newResults = new Map<string, ScrapeResult>();
-            status.results.forEach((result: ScrapeResult) => {
-              const urlEntry = urlsToScrape.find(u => u.url === result.url);
-              if (urlEntry) {
-                newResults.set(urlEntry.rowId, result);
-              }
-            });
-            setResults(newResults);
-          }
+      if (withoutNames > 0) {
+        toast.warning(
+          `${successCount} URLs gescraped - ${withNames} mit Namen, ${withoutNames} ohne Namen gefunden. Details unter Projekt > Fehlgeschlagene Scrapes`,
+          { duration: 8000 }
+        );
+      } else {
+        toast.success(`${successCount} von ${data.total} Websites erfolgreich gescraped`);
+      }
 
-          // Check if completed
-          if (status.status === "completed" || status.status === "cancelled" || status.status === "failed") {
-            clearInterval(pollInterval);
-            setIsScraping(false);
-            setJobId(null);
-            setCurrentUrl("");
-            setProgress(100);
-
-            if (status.status === "completed") {
-              const successCount = status.results?.filter((r: ScrapeResult) => r.success).length || 0;
-              toast.success(`${successCount} von ${status.total} Websites erfolgreich gescraped`);
-
-              if (onScrapeComplete && status.results) {
-                const finalResults = new Map<string, ScrapeResult>();
-                status.results.forEach((result: ScrapeResult) => {
-                  const urlEntry = urlsToScrape.find(u => u.url === result.url);
-                  if (urlEntry) {
-                    finalResults.set(urlEntry.rowId, result);
-                  }
-                });
-                onScrapeComplete(finalResults);
-              }
-            } else if (status.status === "cancelled") {
-              toast.info(`Scraping abgebrochen nach ${status.completed}/${status.total} URLs`);
-            } else {
-              toast.error("Scraping fehlgeschlagen");
-            }
-          }
-        } catch {
-          // Continue polling
-        }
-      }, 1000);
+      if (onScrapeComplete) {
+        onScrapeComplete(newResults);
+      }
 
     } catch {
       toast.error("Fehler beim Scraping");
@@ -711,38 +683,64 @@ export function WebScraper({
                       </div>
 
                       {result.success ? (
-                        <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
-                          {(result.firstName || result.lastName) && (
-                            <div className="flex items-center gap-1 col-span-2">
-                              <User className="h-3 w-3 text-violet-500" />
-                              <span className="truncate">
-                                {result.firstName} {result.lastName}
-                              </span>
+                        <div className="mt-2 space-y-1">
+                          <div className="grid grid-cols-2 gap-2 text-xs">
+                            {(result.firstName || result.lastName) && (
+                              <div className="flex items-center gap-1 col-span-2">
+                                <User className="h-3 w-3 text-violet-500" />
+                                <span className="truncate">
+                                  {result.firstName} {result.lastName}
+                                </span>
+                              </div>
+                            )}
+                            {result.emails.length > 0 && (
+                              <div className="flex items-center gap-1">
+                                <Mail className="h-3 w-3 text-blue-500" />
+                                <span className="truncate">{result.emails[0]}</span>
+                              </div>
+                            )}
+                            {result.phones.length > 0 && (
+                              <div className="flex items-center gap-1">
+                                <Phone className="h-3 w-3 text-green-500" />
+                                <span className="truncate">{result.phones[0]}</span>
+                              </div>
+                            )}
+                            {result.addresses.length > 0 && (
+                              <div className="flex items-center gap-1 col-span-2">
+                                <MapPin className="h-3 w-3 text-red-500" />
+                                <span className="truncate">{result.addresses[0]}</span>
+                              </div>
+                            )}
+                          </div>
+                          {/* Show what was NOT found */}
+                          {!result.firstName && !result.lastName && result.emails.length === 0 && (
+                            <div className="text-xs text-amber-600 dark:text-amber-400 mt-1">
+                              ⚠️ Keine Kontaktdaten gefunden
                             </div>
                           )}
-                          {result.emails.length > 0 && (
-                            <div className="flex items-center gap-1">
-                              <Mail className="h-3 w-3 text-blue-500" />
-                              <span className="truncate">{result.emails[0]}</span>
-                            </div>
-                          )}
-                          {result.phones.length > 0 && (
-                            <div className="flex items-center gap-1">
-                              <Phone className="h-3 w-3 text-green-500" />
-                              <span className="truncate">{result.phones[0]}</span>
-                            </div>
-                          )}
-                          {result.addresses.length > 0 && (
-                            <div className="flex items-center gap-1 col-span-2">
-                              <MapPin className="h-3 w-3 text-red-500" />
-                              <span className="truncate">{result.addresses[0]}</span>
+                          {/* Pages scraped info */}
+                          {result.pages_scraped && result.pages_scraped.length > 0 && (
+                            <div className="text-xs text-muted-foreground mt-1">
+                              📄 {result.pages_scraped.length} Seite(n) durchsucht
                             </div>
                           )}
                         </div>
                       ) : (
-                        <p className="mt-1 text-xs text-red-600 dark:text-red-400">
-                          {result.error || "Keine Daten gefunden"}
-                        </p>
+                        <div className="mt-2 space-y-1">
+                          <p className="text-xs text-red-600 dark:text-red-400 font-medium">
+                            ❌ {result.error || "Unbekannter Fehler"}
+                          </p>
+                          {result.pages_scraped && result.pages_scraped.length > 0 && (
+                            <p className="text-xs text-muted-foreground">
+                              📄 Versuchte Seiten: {result.pages_scraped.join(", ")}
+                            </p>
+                          )}
+                          {!result.pages_scraped || result.pages_scraped.length === 0 && (
+                            <p className="text-xs text-muted-foreground">
+                              🚫 Keine Seiten erreichbar
+                            </p>
+                          )}
+                        </div>
                       )}
                     </div>
                   );

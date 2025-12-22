@@ -66,7 +66,8 @@ REGELN (in Prioritätsreihenfolge)
   ✗ Artikel/Pronomen: Der, Die, Das, Sie, Wir, Ihr, Zum, Zur, Für, Mit, Von (alleinstehend)
   ✗ Städtenamen: Berlin, Hamburg, München, Köln, Frankfurt, Düsseldorf, Unna, etc.
   ✗ Straßennamen: Königswall, Marktplatz, Hauptstraße, Bahnhofstraße, etc.
-  ✗ Aktionswörter: Füllen, Senden, Absenden, Kontaktieren, Enter, Submit
+  ✗ Aktionswörter: Füllen, Senden, Absenden, Kontaktieren, Enter, Submit, Rufen, Anrufen, Schreiben, Besuchen, Klicken
+  ✗ Call-to-Action-Phrasen: "Rufen Sie", "Schreiben Sie", "Kontaktieren Sie", "Besuchen Sie", "Jetzt", "Hier"
 
   → Wenn nur solche Wörter gefunden werden: first_name: null, last_name: null
   → NIEMALS raten! Lieber null als falscher Name.

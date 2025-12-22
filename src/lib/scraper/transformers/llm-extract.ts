@@ -70,10 +70,40 @@ export async function extractContactData(
   content: string,
   config: LLMConfig
 ): Promise<ExtractionResult<ExtractedContactData>> {
-  const systemPrompt = `Du bist ein Experte für die Extraktion von Kontaktdaten aus deutschen Webseiten.
-Extrahiere alle verfügbaren Kontaktinformationen aus dem gegebenen Text.
-Antworte NUR mit einem validen JSON-Objekt ohne zusätzlichen Text.
-Wenn ein Feld nicht gefunden wird, verwende ein leeres Array [] oder null.`;
+  const systemPrompt = `Du bist ein Experte für die Extraktion von Kontaktdaten aus deutschsprachigen Webseiten (Deutschland, Österreich, Schweiz).
+
+WICHTIGE REGELN für Namen - LIES GENAU:
+
+1. VORNAME = Nur ECHTE Vornamen wie: Stefan, Michael, Thomas, Anna, Sandra, Klaus, Peter, Bernhard, Adnan, Maria, Elisabeth
+2. NACHNAME = Nur ECHTE Nachnamen wie: Schoder, Müller, Schmidt, Voigt, Meier, Suler, Hercegovac, Huber, Gruber
+
+3. TITEL gehören NICHT in firstName/lastName! Diese Titel gehören in "position":
+   - Akademisch: Dr., Prof., Mag., Dipl.-Ing., Dipl.-Kfm., LL.M., M.A., MBA, DI, Ing.
+   - Beruflich: Rechtsanwalt, Notar, Steuerberater, Wirtschaftsprüfer, Geschäftsführer, Inhaber
+
+4. BEISPIELE für korrekte Extraktion:
+   - "Mag. Stefan Schoder" → firstName: "Stefan", lastName: "Schoder", position: "Mag."
+   - "Dr. iur. Michael Fuß, LL.M." → firstName: "Michael", lastName: "Fuß", position: "Dr. iur., LL.M."
+   - "Rechtsanwalt Thomas Gilsbach" → firstName: "Thomas", lastName: "Gilsbach", position: "Rechtsanwalt"
+   - "Geschäftsführer: Herr Bernhard Suler, dipl." → firstName: "Bernhard", lastName: "Suler", position: "Geschäftsführer, dipl."
+   - "Adnan Hercegovac (Staatlich geprüfter Versicherungsmakler)" → firstName: "Adnan", lastName: "Hercegovac", position: "Staatlich geprüfter Versicherungsmakler"
+   - "Inhaber & Geschäftsführer: Herr Max Mustermann" → firstName: "Max", lastName: "Mustermann", position: "Inhaber & Geschäftsführer"
+
+5. FALSCH - Diese sind KEINE Namen:
+   - UI-Texte: "Füllen", "Sie", "Ihr", "Bitte", "Hier", "Kontakt", "Anfrage", "Name", "E-Mail"
+   - Berufe ohne Person: "Rechtsanwalt" (allein), "Der Geschäftsführer" (ohne Name)
+   - Firmennamen: "GmbH", "AG", "KG", "e.U."
+
+6. WICHTIG: Wenn KEINE echte Person mit erkennbarem Vor- UND Nachname gefunden wird, gib contactPersons: [] zurück!
+   Erfinde NIEMALS Namen! Lieber leer lassen als falsch!
+
+REGELN für E-Mails:
+1. "This email address is being protected from spambots" = E-Mail JavaScript-geschützt → leeres Array
+2. Akzeptiere auch info@, office@, kontakt@ wenn keine persönlichen E-Mails verfügbar
+3. Priorisiere persönliche E-Mails (vorname.nachname@) vor generischen
+
+Antworte NUR mit validem JSON. Kein zusätzlicher Text.
+Nicht gefundene Felder = leeres Array [] oder null.`;
 
   const schema = {
     type: 'object',
@@ -98,13 +128,15 @@ Wenn ein Feld nicht gefunden wird, verwende ein leeres Array [] oder null.`;
         items: {
           type: 'object',
           properties: {
-            name: { type: 'string' },
-            position: { type: 'string' },
+            firstName: { type: 'string', description: 'NUR der reine Vorname ohne Titel. Beispiel: Bei "Mag. Stefan Schoder" → "Stefan"' },
+            lastName: { type: 'string', description: 'NUR der reine Nachname. Beispiel: Bei "Mag. Stefan Schoder" → "Schoder"' },
+            name: { type: 'string', description: 'Voller Name NUR falls firstName/lastName absolut nicht trennbar' },
+            position: { type: 'string', description: 'ALLE Titel und Berufsbezeichnungen hier! Z.B. "Mag.", "Dr. iur., Rechtsanwalt", "Geschäftsführer"' },
             email: { type: 'string' },
             phone: { type: 'string' },
           },
         },
-        description: 'Ansprechpartner mit Name und Position',
+        description: 'Echte Personen mit Vor- UND Nachname. Titel wie Dr./Mag./Prof. gehören in position, NICHT in firstName!',
       },
       socialLinks: {
         type: 'object',
@@ -209,11 +241,12 @@ async function callLLM(prompt: string, config: LLMConfig): Promise<string> {
 
 /**
  * Call OpenAI API
+ * NOTE: Only uses user-provided API key, NO server fallback for security/cost reasons
  */
 async function callOpenAI(prompt: string, config: LLMConfig): Promise<string> {
-  const apiKey = config.apiKey || process.env.OPENAI_API_KEY;
+  const apiKey = config.apiKey;
   if (!apiKey) {
-    throw new Error('OpenAI API key not configured');
+    throw new Error('OpenAI API key not configured - each user must provide their own API key');
   }
 
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -246,11 +279,12 @@ async function callOpenAI(prompt: string, config: LLMConfig): Promise<string> {
 
 /**
  * Call Anthropic API
+ * NOTE: Only uses user-provided API key, NO server fallback for security/cost reasons
  */
 async function callAnthropic(prompt: string, config: LLMConfig): Promise<string> {
-  const apiKey = config.apiKey || process.env.ANTHROPIC_API_KEY;
+  const apiKey = config.apiKey;
   if (!apiKey) {
-    throw new Error('Anthropic API key not configured');
+    throw new Error('Anthropic API key not configured - each user must provide their own API key');
   }
 
   const response = await fetch('https://api.anthropic.com/v1/messages', {

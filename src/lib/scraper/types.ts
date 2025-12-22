@@ -268,7 +268,9 @@ export interface EngineOptions {
 // ============================================================================
 
 export interface ContactPerson {
-  name: string;
+  firstName?: string;
+  lastName?: string;
+  name?: string;
   position?: string;
   email?: string;
   phone?: string;

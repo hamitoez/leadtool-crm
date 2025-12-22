@@ -130,11 +130,11 @@ export default function ImportPage() {
         const data = await response.json();
         setProjects(data.projects || []);
       } else {
-        toast.error("Failed to load projects");
+        toast.error("Fehler beim Laden der Projekte");
       }
     } catch (error) {
       console.error("Error loading projects:", error);
-      toast.error("Failed to load projects");
+      toast.error("Fehler beim Laden der Projekte");
     } finally {
       setIsLoadingProjects(false);
     }
@@ -230,13 +230,13 @@ export default function ImportPage() {
         await parseReviewsCsv();
       }
 
-      toast.success(result.message || "CSV file parsed successfully");
+      toast.success(result.message || "CSV-Datei erfolgreich eingelesen");
       // Gehe zum Template-Auswahl-Step
       setCurrentStep("template");
     } catch (error) {
       console.error("Upload error:", error);
       toast.error(
-        error instanceof Error ? error.message : "Failed to upload file"
+        error instanceof Error ? error.message : "Fehler beim Hochladen der Datei"
       );
     } finally {
       setIsUploading(false);
@@ -279,11 +279,11 @@ export default function ImportPage() {
       if (foundIdCol) setReviewsIdColumn(foundIdCol);
       if (foundTextCol) setReviewsTextColumn(foundTextCol);
 
-      toast.success("Reviews CSV parsed successfully");
+      toast.success("Bewertungs-CSV erfolgreich eingelesen");
     } catch (error) {
       console.error("Reviews upload error:", error);
       toast.error(
-        error instanceof Error ? error.message : "Failed to parse reviews CSV"
+        error instanceof Error ? error.message : "Fehler beim Einlesen der Bewertungen"
       );
     } finally {
       setIsUploadingReviews(false);
@@ -372,11 +372,6 @@ export default function ImportPage() {
       return newRow;
     });
 
-    // Log merge stats
-    const totalReviews = Array.from(reviewsMap.values()).reduce((sum, arr) => sum + arr.length, 0);
-    const leadsWithReviews = reviewsMap.size;
-    console.log(`Merged ${totalReviews} reviews into ${leadsWithReviews} leads as JSON`);
-
     return {
       ...csvData,
       headers: newHeaders,
@@ -459,7 +454,7 @@ export default function ImportPage() {
   const handleProceedToConfig = () => {
     const includedColumns = columnMappings.filter((m) => m.include);
     if (includedColumns.length === 0) {
-      toast.error("Please select at least one column to import");
+      toast.error("Bitte wähle mindestens eine Spalte aus");
       return;
     }
 
@@ -504,12 +499,12 @@ export default function ImportPage() {
 
     // Validate configuration
     if (!selectedProjectId && !newProjectName) {
-      toast.error("Please select a project or create a new one");
+      toast.error("Bitte wähle ein Projekt aus oder erstelle ein neues");
       return;
     }
 
     if (!tableName.trim()) {
-      toast.error("Please enter a table name");
+      toast.error("Bitte gib einen Tabellennamen ein");
       return;
     }
 
@@ -542,11 +537,11 @@ export default function ImportPage() {
       setImportProgress(100);
       setImportResult(result);
       setCurrentStep("complete");
-      toast.success(`Successfully imported ${result.rowsImported} rows!`);
+      toast.success(`${result.rowsImported} Zeilen erfolgreich importiert!`);
     } catch (error) {
       console.error("Import error:", error);
       toast.error(
-        error instanceof Error ? error.message : "Failed to import data"
+        error instanceof Error ? error.message : "Fehler beim Import"
       );
       setCurrentStep("configure");
     }
@@ -641,9 +636,9 @@ export default function ImportPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold">Import Data</h1>
+        <h1 className="text-3xl font-bold">Daten importieren</h1>
         <p className="text-muted-foreground">
-          Upload and import your CSV or Excel data into LeadTool CRM
+          Lade CSV- oder Excel-Dateien hoch und importiere sie in LeadTool
         </p>
       </div>
 
@@ -906,7 +901,7 @@ export default function ImportPage() {
                       <strong>{reviewsCsvData.totalRows}</strong> Reviews werden mit den Leads zusammengeführt.
                     </p>
                     <p className="text-xs text-muted-foreground">
-                      Format: JSON-komprimiert in einer Spalte "Review Text"
+                      Format: JSON-komprimiert in einer Spalte &quot;Review Text&quot;
                       <br />
                       <code className="bg-muted px-1 rounded text-[10px]">
                         {`{"count":3,"reviews":[{"id":1,"text":"..."},...]}`}
@@ -1092,18 +1087,18 @@ export default function ImportPage() {
                   <AlertCircle className="h-5 w-5 text-red-600 dark:text-red-400" />
                   <div className="flex-1 text-sm">
                     <div className="font-medium text-red-800 dark:text-red-200">
-                      Validation Issues ({validationErrors.length})
+                      Validierungsfehler ({validationErrors.length})
                     </div>
                     <div className="mt-2 max-h-32 overflow-y-auto">
                       <ul className="space-y-1 text-red-700 dark:text-red-300">
                         {validationErrors.slice(0, 10).map((err, i) => (
                           <li key={i} className="text-xs">
-                            Row {err.row}, {err.column}: {err.error} ({err.value})
+                            Zeile {err.row}, {err.column}: {err.error} ({err.value})
                           </li>
                         ))}
                         {validationErrors.length > 10 && (
                           <li className="text-xs font-medium">
-                            ... and {validationErrors.length - 10} more issues
+                            ... und {validationErrors.length - 10} weitere Fehler
                           </li>
                         )}
                       </ul>

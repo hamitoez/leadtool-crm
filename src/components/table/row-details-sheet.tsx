@@ -8,6 +8,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -16,6 +17,10 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card, CardContent } from "@/components/ui/card";
+import { ContactTimeline } from "@/components/timeline/contact-timeline";
+import { CreateActivityDialog } from "@/components/activities/create-activity-dialog";
+import { CreateReminderDialog } from "@/components/reminders/create-reminder-dialog";
+import { ComposeEmailDialog } from "@/components/email/compose-email-dialog";
 import {
   Popover,
   PopoverContent,
@@ -66,6 +71,10 @@ import {
   Quote,
   Eye,
   EyeOff,
+  PhoneCall,
+  CalendarPlus,
+  History,
+  Bell,
 } from "lucide-react";
 import { toast } from "sonner";
 import { formatDistanceToNow } from "date-fns";
@@ -123,6 +132,15 @@ const AI_QUICK_ACTIONS = [
   { id: "translate_de", label: "→ Deutsch", icon: Languages, prompt: "Übersetze ins Deutsche:" },
 ];
 
+// Quick Activity Actions
+const QUICK_ACTIVITY_ACTIONS = [
+  { type: "CALL", icon: PhoneCall, label: "Anruf", color: "text-green-600" },
+  { type: "EMAIL", icon: MessageSquare, label: "E-Mail", color: "text-blue-600" },
+  { type: "MEETING", icon: CalendarPlus, label: "Meeting", color: "text-purple-600" },
+  { type: "NOTE", icon: FileText, label: "Notiz", color: "text-orange-600" },
+  { type: "TASK", icon: CheckSquare, label: "Aufgabe", color: "text-red-600" },
+];
+
 export function RowDetailsSheet({
   open,
   onOpenChange,
@@ -149,7 +167,32 @@ export function RowDetailsSheet({
   const [apiKey, setApiKey] = useState<string>("");
   const [aiProvider, setAiProvider] = useState<string>("anthropic");
 
+  // Activity Dialog State
+  const [activityDialogOpen, setActivityDialogOpen] = useState(false);
+  const [activityType, setActivityType] = useState("NOTE");
+
+  // Reminder Dialog State
+  const [reminderDialogOpen, setReminderDialogOpen] = useState(false);
+
+  // Email Dialog State
+  const [emailDialogOpen, setEmailDialogOpen] = useState(false);
+
   const promptInputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Handle quick activity action
+  const handleQuickActivity = (type: string) => {
+    if (type === "EMAIL") {
+      setEmailDialogOpen(true);
+    } else {
+      setActivityType(type);
+      setActivityDialogOpen(true);
+    }
+  };
+
+  const handleActivityCreated = () => {
+    setActivityDialogOpen(false);
+    // Refresh can be triggered via parent component if needed
+  };
 
   // Load API Key from database
   useEffect(() => {
@@ -473,6 +516,58 @@ Antworte NUR mit dem generierten Text, ohne Erklärungen oder Einleitungen.`;
       return String(row.cells[companyCol.id].value);
     }
     return `Eintrag #${row?.position !== undefined ? row.position + 1 : ""}`;
+  };
+
+  // Get contact email for email dialog
+  const getContactEmail = () => {
+    const emailCol = columns.find(c => c.type === "EMAIL" || c.name.toLowerCase().includes("email") || c.name.toLowerCase().includes("e-mail"));
+    if (emailCol && row?.cells[emailCol.id]?.value) {
+      return String(row.cells[emailCol.id].value);
+    }
+    return "";
+  };
+
+  // Get contact data for email templates
+  const getContactData = (): Record<string, string> => {
+    const data: Record<string, string> = {};
+
+    // Find relevant columns and extract values
+    columns.forEach((col) => {
+      const cellValue = row?.cells[col.id]?.value;
+      if (!cellValue) return;
+
+      const name = col.name.toLowerCase();
+      const value = String(cellValue);
+
+      if (col.type === "COMPANY" || name.includes("firma") || name.includes("company")) {
+        data.firma = value;
+        data.company = value;
+      } else if (col.type === "EMAIL" || name.includes("email")) {
+        data.email = value;
+      } else if (col.type === "PHONE" || name.includes("telefon") || name.includes("phone")) {
+        data.telefon = value;
+        data.phone = value;
+      } else if (name.includes("vorname") || name === "first name") {
+        data.vorname = value;
+        data.firstName = value;
+      } else if (name.includes("nachname") || name === "last name") {
+        data.nachname = value;
+        data.lastName = value;
+      } else if (name.includes("anrede") || name.includes("salutation")) {
+        data.anrede = value;
+      }
+    });
+
+    // Generate anrede if not set
+    if (!data.anrede) {
+      if (data.nachname) {
+        data.anrede = `Sehr geehrte(r) Herr/Frau ${data.nachname}`;
+      } else {
+        data.anrede = "Sehr geehrte Damen und Herren";
+      }
+    }
+
+    return data;
   };
 
   // Get rating if exists
@@ -810,115 +905,181 @@ Antworte NUR mit dem generierten Text, ohne Erklärungen oder Einleitungen.`;
           </div>
         </div>
 
-        {/* Content */}
-        <ScrollArea className="flex-1 px-6 py-4">
-          <div className="space-y-6">
-            {/* Contact Info Section */}
-            {mainColumns.length > 0 && (
-              <Collapsible
-                open={expandedSections.has("contact")}
-                onOpenChange={() => toggleSection("contact")}
-                defaultOpen
-              >
-                <CollapsibleTrigger className="flex items-center gap-2 w-full text-left mb-3 group">
-                  {expandedSections.has("contact") ? (
-                    <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                  ) : (
-                    <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                  )}
-                  <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wide">
-                    Kontaktdaten
-                  </h3>
-                  <Badge variant="secondary" className="text-xs">
-                    {mainColumns.length}
-                  </Badge>
-                </CollapsibleTrigger>
-                <CollapsibleContent className="space-y-3">
-                  {mainColumns.map(renderFieldCard)}
-                </CollapsibleContent>
-              </Collapsible>
-            )}
+        {/* Content with Tabs */}
+        <Tabs defaultValue="details" className="flex-1 flex flex-col overflow-hidden">
+          <TabsList className="mx-6 mt-4 grid grid-cols-3">
+            <TabsTrigger value="details">Details</TabsTrigger>
+            <TabsTrigger value="activities" className="flex items-center gap-1">
+              <History className="h-3.5 w-3.5" />
+              Aktivitaeten
+            </TabsTrigger>
+            <TabsTrigger value="timeline">Timeline</TabsTrigger>
+          </TabsList>
 
-            {/* Data Section */}
-            {dataColumns.length > 0 && (
-              <Collapsible
-                open={expandedSections.has("data")}
-                onOpenChange={() => toggleSection("data")}
-                defaultOpen
-              >
-                <CollapsibleTrigger className="flex items-center gap-2 w-full text-left mb-3 group">
-                  {expandedSections.has("data") ? (
-                    <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                  ) : (
-                    <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                  )}
-                  <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wide">
-                    Daten & Bewertungen
-                  </h3>
-                  <Badge variant="secondary" className="text-xs">
-                    {dataColumns.length}
-                  </Badge>
-                </CollapsibleTrigger>
-                <CollapsibleContent className="space-y-3">
-                  {dataColumns.map(renderFieldCard)}
-                </CollapsibleContent>
-              </Collapsible>
-            )}
+          {/* Details Tab */}
+          <TabsContent value="details" className="flex-1 mt-0 overflow-hidden">
+            <ScrollArea className="h-full px-6 py-4">
+              <div className="space-y-6">
+                {/* Contact Info Section */}
+                {mainColumns.length > 0 && (
+                  <Collapsible
+                    open={expandedSections.has("contact")}
+                    onOpenChange={() => toggleSection("contact")}
+                    defaultOpen
+                  >
+                    <CollapsibleTrigger className="flex items-center gap-2 w-full text-left mb-3 group">
+                      {expandedSections.has("contact") ? (
+                        <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                      ) : (
+                        <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                      )}
+                      <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wide">
+                        Kontaktdaten
+                      </h3>
+                      <Badge variant="secondary" className="text-xs">
+                        {mainColumns.length}
+                      </Badge>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent className="space-y-3">
+                      {mainColumns.map(renderFieldCard)}
+                    </CollapsibleContent>
+                  </Collapsible>
+                )}
 
-            {/* AI Generated Section */}
-            {aiColumns.length > 0 && (
-              <Collapsible
-                open={expandedSections.has("ai")}
-                onOpenChange={() => toggleSection("ai")}
-                defaultOpen
-              >
-                <CollapsibleTrigger className="flex items-center gap-2 w-full text-left mb-3 group">
-                  {expandedSections.has("ai") ? (
-                    <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                  ) : (
-                    <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                  )}
-                  <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wide flex items-center gap-2">
-                    <Sparkles className="h-4 w-4 text-purple-500" />
-                    KI-Generiert
-                  </h3>
-                  <Badge variant="secondary" className="text-xs">
-                    {aiColumns.length}
-                  </Badge>
-                </CollapsibleTrigger>
-                <CollapsibleContent className="space-y-3">
-                  {aiColumns.map(renderFieldCard)}
-                </CollapsibleContent>
-              </Collapsible>
-            )}
+                {/* Data Section */}
+                {dataColumns.length > 0 && (
+                  <Collapsible
+                    open={expandedSections.has("data")}
+                    onOpenChange={() => toggleSection("data")}
+                    defaultOpen
+                  >
+                    <CollapsibleTrigger className="flex items-center gap-2 w-full text-left mb-3 group">
+                      {expandedSections.has("data") ? (
+                        <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                      ) : (
+                        <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                      )}
+                      <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wide">
+                        Daten & Bewertungen
+                      </h3>
+                      <Badge variant="secondary" className="text-xs">
+                        {dataColumns.length}
+                      </Badge>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent className="space-y-3">
+                      {dataColumns.map(renderFieldCard)}
+                    </CollapsibleContent>
+                  </Collapsible>
+                )}
 
-            {/* Text Fields Section */}
-            {textColumns.length > 0 && (
-              <Collapsible
-                open={expandedSections.has("text")}
-                onOpenChange={() => toggleSection("text")}
-                defaultOpen
-              >
-                <CollapsibleTrigger className="flex items-center gap-2 w-full text-left mb-3 group">
-                  {expandedSections.has("text") ? (
-                    <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                  ) : (
-                    <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                  )}
-                  <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wide">
-                    Weitere Felder
+                {/* AI Generated Section */}
+                {aiColumns.length > 0 && (
+                  <Collapsible
+                    open={expandedSections.has("ai")}
+                    onOpenChange={() => toggleSection("ai")}
+                    defaultOpen
+                  >
+                    <CollapsibleTrigger className="flex items-center gap-2 w-full text-left mb-3 group">
+                      {expandedSections.has("ai") ? (
+                        <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                      ) : (
+                        <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                      )}
+                      <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wide flex items-center gap-2">
+                        <Sparkles className="h-4 w-4 text-purple-500" />
+                        KI-Generiert
+                      </h3>
+                      <Badge variant="secondary" className="text-xs">
+                        {aiColumns.length}
+                      </Badge>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent className="space-y-3">
+                      {aiColumns.map(renderFieldCard)}
+                    </CollapsibleContent>
+                  </Collapsible>
+                )}
+
+                {/* Text Fields Section */}
+                {textColumns.length > 0 && (
+                  <Collapsible
+                    open={expandedSections.has("text")}
+                    onOpenChange={() => toggleSection("text")}
+                    defaultOpen
+                  >
+                    <CollapsibleTrigger className="flex items-center gap-2 w-full text-left mb-3 group">
+                      {expandedSections.has("text") ? (
+                        <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                      ) : (
+                        <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                      )}
+                      <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wide">
+                        Weitere Felder
+                      </h3>
+                      <Badge variant="secondary" className="text-xs">
+                        {textColumns.length}
+                      </Badge>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent className="space-y-3">
+                      {textColumns.map(renderFieldCard)}
+                    </CollapsibleContent>
+                  </Collapsible>
+                )}
+              </div>
+            </ScrollArea>
+          </TabsContent>
+
+          {/* Activities Tab */}
+          <TabsContent value="activities" className="flex-1 mt-0 overflow-hidden">
+            <ScrollArea className="h-full px-6 py-4">
+              <div className="space-y-6">
+                {/* Quick Actions */}
+                <Card>
+                  <CardContent className="pt-4">
+                    <h3 className="text-sm font-medium mb-3">Schnellaktionen</h3>
+                    <div className="flex flex-wrap gap-2">
+                      {QUICK_ACTIVITY_ACTIONS.map((action) => (
+                        <Button
+                          key={action.type}
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleQuickActivity(action.type)}
+                          className="flex items-center gap-1.5"
+                        >
+                          <action.icon className={cn("h-4 w-4", action.color)} />
+                          {action.label}
+                        </Button>
+                      ))}
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setReminderDialogOpen(true)}
+                        className="flex items-center gap-1.5"
+                      >
+                        <Bell className="h-4 w-4 text-yellow-600" />
+                        Erinnerung
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* Activities Timeline embedded */}
+                <div className="space-y-3">
+                  <h3 className="text-sm font-medium text-muted-foreground">
+                    Aktivitaeten-Verlauf
                   </h3>
-                  <Badge variant="secondary" className="text-xs">
-                    {textColumns.length}
-                  </Badge>
-                </CollapsibleTrigger>
-                <CollapsibleContent className="space-y-3">
-                  {textColumns.map(renderFieldCard)}
-                </CollapsibleContent>
-              </Collapsible>
-            )}
-          </div>
-        </ScrollArea>
+                  <ContactTimeline rowId={row.id} />
+                </div>
+              </div>
+            </ScrollArea>
+          </TabsContent>
+
+          {/* Timeline Tab */}
+          <TabsContent value="timeline" className="flex-1 mt-0 overflow-hidden">
+            <ScrollArea className="h-full px-6 py-4">
+              <ContactTimeline rowId={row.id} />
+            </ScrollArea>
+          </TabsContent>
+        </Tabs>
 
         {/* Footer */}
         <div className="p-4 border-t bg-muted/30">
@@ -932,6 +1093,41 @@ Antworte NUR mit dem generierten Text, ohne Erklärungen oder Einleitungen.`;
           </div>
         </div>
       </SheetContent>
+
+      {/* Create Activity Dialog */}
+      {row && (
+        <CreateActivityDialog
+          open={activityDialogOpen}
+          onOpenChange={setActivityDialogOpen}
+          rowId={row.id}
+          defaultType={activityType}
+          onSuccess={handleActivityCreated}
+        />
+      )}
+
+      {/* Create Reminder Dialog */}
+      {row && (
+        <CreateReminderDialog
+          open={reminderDialogOpen}
+          onOpenChange={setReminderDialogOpen}
+          rowId={row.id}
+          defaultTitle={companyName}
+          onSuccess={() => setReminderDialogOpen(false)}
+        />
+      )}
+
+      {/* Compose Email Dialog */}
+      {row && (
+        <ComposeEmailDialog
+          open={emailDialogOpen}
+          onOpenChange={setEmailDialogOpen}
+          rowId={row.id}
+          defaultTo={getContactEmail()}
+          defaultToName={getContactData().vorname ? `${getContactData().vorname} ${getContactData().nachname || ""}`.trim() : companyName}
+          contactData={getContactData()}
+          onSuccess={() => setEmailDialogOpen(false)}
+        />
+      )}
     </Sheet>
   );
 }

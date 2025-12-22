@@ -16,19 +16,45 @@ export async function GET(request: NextRequest) {
 
     const { searchParams } = new URL(request.url);
     const search = searchParams.get("search");
+    const organizationId = searchParams.get("organizationId");
+
+    // Finde Organisationen, in denen der User Mitglied ist
+    const userOrgIds = await prisma.organizationMember.findMany({
+      where: { userId: session.user.id, isActive: true },
+      select: { organizationId: true },
+    }).then(members => members.map(m => m.organizationId));
+
+    // Projekte filtern: eigene ODER von Organisationen, in denen User Mitglied ist
+    const whereClause = organizationId
+      ? {
+          // Spezifische Organisation gefiltert
+          organizationId,
+          OR: [
+            { userId: session.user.id },
+            { organizationId: { in: userOrgIds } },
+          ],
+        }
+      : {
+          // Alle zugänglichen Projekte
+          OR: [
+            { userId: session.user.id },
+            { organizationId: { in: userOrgIds } },
+          ],
+        };
 
     // If search query is provided, include tables for search results
     if (search) {
       const projects = await prisma.project.findMany({
-        where: {
-          userId: session.user.id,
-        },
+        where: whereClause,
         include: {
           tables: {
             select: {
               id: true,
               name: true,
             },
+          },
+          organization: {
+            select: { id: true, name: true },
           },
           _count: {
             select: {
@@ -46,10 +72,11 @@ export async function GET(request: NextRequest) {
 
     // Default: return projects without tables
     const projects = await prisma.project.findMany({
-      where: {
-        userId: session.user.id,
-      },
+      where: whereClause,
       include: {
+        organization: {
+          select: { id: true, name: true },
+        },
         _count: {
           select: {
             tables: true,
@@ -84,14 +111,43 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json();
     const validatedData = createProjectSchema.parse(body);
+    const { organizationId } = body;
+
+    // Wenn organizationId angegeben, prüfen ob User Mitglied ist
+    if (organizationId) {
+      const membership = await prisma.organizationMember.findUnique({
+        where: {
+          organizationId_userId: { organizationId, userId: session.user.id },
+        },
+      });
+
+      if (!membership || !membership.isActive) {
+        return NextResponse.json(
+          { error: "Keine Berechtigung für diese Organisation" },
+          { status: 403 }
+        );
+      }
+
+      // Nur OWNER, ADMIN und MANAGER dürfen Projekte erstellen
+      if (!["OWNER", "ADMIN", "MANAGER"].includes(membership.role)) {
+        return NextResponse.json(
+          { error: "Keine Berechtigung zum Erstellen von Projekten" },
+          { status: 403 }
+        );
+      }
+    }
 
     const project = await prisma.project.create({
       data: {
         name: validatedData.name,
         description: validatedData.description,
         userId: session.user.id,
+        organizationId: organizationId || null,
       },
       include: {
+        organization: {
+          select: { id: true, name: true },
+        },
         _count: {
           select: {
             tables: true,

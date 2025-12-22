@@ -101,8 +101,45 @@ export async function scrapeWithEngine(
     return fallbackResult;
   }
 
-  // Return original error if fallback also failed
-  return result;
+  // Return combined error if both failed - make it more readable
+  const primaryError = result.error || 'unbekannt';
+  const fallbackError = fallbackResult.error || 'unbekannt';
+
+  // Extract the most meaningful error for display
+  const getSimpleError = (err: string): string => {
+    if (err.includes('ERR_NAME_NOT_RESOLVED') || err.includes('DNS')) {
+      return 'Domain existiert nicht mehr';
+    }
+    if (err.includes('ERR_CERT') || err.includes('SSL') || err.includes('certificate')) {
+      return 'SSL-Zertifikat ungültig';
+    }
+    if (err.includes('Timeout') || err.includes('ETIMEDOUT')) {
+      return 'Timeout - Website antwortet nicht';
+    }
+    if (err.includes('ECONNREFUSED')) {
+      return 'Verbindung abgelehnt';
+    }
+    if (err.includes('ECONNRESET')) {
+      return 'Verbindung unterbrochen';
+    }
+    if (err.includes('fetch failed')) {
+      return 'Abruf fehlgeschlagen';
+    }
+    // Return first 100 chars of original error
+    return err.length > 100 ? err.substring(0, 100) + '...' : err;
+  };
+
+  // Use the more informative error
+  const simpleError = getSimpleError(primaryError) !== getSimpleError(fallbackError)
+    ? `${getSimpleError(primaryError)} / ${getSimpleError(fallbackError)}`
+    : getSimpleError(primaryError);
+
+  const combinedError = `Website nicht erreichbar: ${simpleError}`;
+
+  return {
+    ...result,
+    error: combinedError,
+  };
 }
 
 /**

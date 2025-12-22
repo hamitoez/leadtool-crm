@@ -46,8 +46,8 @@ import {
   Monitor,
   FileSpreadsheet
 } from "lucide-react";
-import { Input } from "@/components/ui/input";
 import { NotificationBell } from "@/components/notifications/notification-bell";
+import { ReminderBell } from "@/components/reminders/reminder-bell";
 import { cn } from "@/lib/utils";
 
 const navigation = [
@@ -340,6 +340,7 @@ export function Header() {
           <span className="sr-only">Theme wechseln</span>
         </Button>
 
+        <ReminderBell />
         <NotificationBell />
 
         <DropdownMenu>

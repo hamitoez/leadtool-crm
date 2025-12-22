@@ -32,7 +32,7 @@ import {
 } from "@dnd-kit/sortable";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { TableToolbar } from "./table-toolbar";
+import { TableToolbar, EmptyFieldFilter } from "./table-toolbar";
 import { ContactDataFilter } from "@/lib/export";
 import { ColumnHeader } from "./column-header";
 import { getCellRenderer } from "./cells";
@@ -63,6 +63,7 @@ interface DataTableProps {
   onColumnRename?: (columnId: string, newName: string) => void;
   onColumnDelete?: (columnId: string) => void;
   onColumnHide?: (columnId: string) => void;
+  onClearColumn?: (columnId: string) => void;
   onAddRow?: () => void;
   onRowDelete?: (rowId: string) => void;
   onBulkRowDelete?: (rowIds: string[]) => void;
@@ -163,6 +164,7 @@ export function DataTable({
   onColumnRename,
   onColumnDelete,
   onColumnHide,
+  onClearColumn,
   onAddRow,
   onRowDelete,
   onBulkRowDelete,
@@ -197,6 +199,7 @@ export function DataTable({
   );
   const [rowSelection, setRowSelection] = React.useState<RowSelectionState>({});
   const [columnSizing, setColumnSizing] = React.useState<ColumnSizingState>({});
+  const [emptyFieldFilters, setEmptyFieldFilters] = React.useState<EmptyFieldFilter[]>([]);
 
   const [isMounted, setIsMounted] = useState(false);
   const dndContextId = useId();
@@ -205,6 +208,56 @@ export function DataTable({
   useEffect(() => {
     setIsMounted(true);
   }, []);
+
+  // Find column IDs for Vorname, Nachname, E-Mail based on name patterns
+  const fieldColumnIds = useMemo(() => {
+    const result: { vorname?: string; nachname?: string; email?: string } = {};
+
+    columnConfigs.forEach((col) => {
+      const nameLower = col.name.toLowerCase();
+      if (nameLower.includes("vorname") || nameLower === "first name" || nameLower === "firstname") {
+        result.vorname = col.id;
+      }
+      if (nameLower.includes("nachname") || nameLower === "last name" || nameLower === "lastname") {
+        result.nachname = col.id;
+      }
+      if (nameLower.includes("email") || nameLower.includes("e-mail") || nameLower === "mail") {
+        result.email = col.id;
+      }
+    });
+
+    return result;
+  }, [columnConfigs]);
+
+  // Filter data based on empty field filters
+  const filteredData = useMemo(() => {
+    if (emptyFieldFilters.length === 0) {
+      return data;
+    }
+
+    return data.filter((row) => {
+      // Check each active filter - row passes if it has the empty field
+      for (const filter of emptyFieldFilters) {
+        const columnId = fieldColumnIds[filter];
+        if (!columnId) continue;
+
+        const cell = row.cells[columnId];
+        const value = cell?.value;
+
+        // Check if the value is empty (null, undefined, empty string, or whitespace)
+        const isEmpty = value === null ||
+          value === undefined ||
+          String(value).trim() === "";
+
+        // If filter is active but field is NOT empty, exclude the row
+        if (!isEmpty) {
+          return false;
+        }
+      }
+
+      return true;
+    });
+  }, [data, emptyFieldFilters, fieldColumnIds]);
 
   // Initialize column sizing from config
   useEffect(() => {
@@ -351,6 +404,7 @@ export function DataTable({
           onRename={(newName) => onColumnRename?.(colConfig.id, newName)}
           onDelete={() => onColumnDelete?.(colConfig.id)}
           onHide={() => onColumnHide?.(colConfig.id)}
+          onClearColumn={() => onClearColumn?.(colConfig.id)}
           sortable={true}
           resizable={true}
         />
@@ -425,10 +479,10 @@ export function DataTable({
     }
 
     return allColumns;
-  }, [columnConfigs, onCellUpdate, onColumnRename, onColumnDelete, onColumnHide, onRowDelete, enableRowSelection]);
+  }, [columnConfigs, onCellUpdate, onColumnRename, onColumnDelete, onColumnHide, onClearColumn, onRowDelete, enableRowSelection, onToggleFavorite, onUpdateNotes]);
 
   const table = useReactTable({
-    data,
+    data: filteredData,
     columns,
     state: {
       sorting,
@@ -497,29 +551,29 @@ export function DataTable({
     if (selectedRowIds.length === 0) return;
     const rowIds = selectedRowIds.map((index) => {
       const rowIndex = parseInt(index, 10);
-      return data[rowIndex]?.id;
+      return filteredData[rowIndex]?.id;
     }).filter(Boolean) as string[];
     if (onBulkRowDelete && rowIds.length > 0) {
       onBulkRowDelete(rowIds);
       setRowSelection({});
     }
-  }, [selectedRowIds, data, onBulkRowDelete]);
+  }, [selectedRowIds, filteredData, onBulkRowDelete]);
 
   const handleGenerateCompliments = useCallback(() => {
     if (selectedRowIds.length === 0 || !onGenerateCompliments) return;
     const selectedRows = selectedRowIds
-      .map((index) => data[parseInt(index, 10)])
+      .map((index) => filteredData[parseInt(index, 10)])
       .filter(Boolean) as TableRowData[];
     if (selectedRows.length > 0) onGenerateCompliments(selectedRows);
-  }, [selectedRowIds, data, onGenerateCompliments]);
+  }, [selectedRowIds, filteredData, onGenerateCompliments]);
 
   const handleScrapeWebsites = useCallback(() => {
     if (selectedRowIds.length === 0 || !onScrapeWebsites) return;
     const selectedRows = selectedRowIds
-      .map((index) => data[parseInt(index, 10)])
+      .map((index) => filteredData[parseInt(index, 10)])
       .filter(Boolean) as TableRowData[];
     if (selectedRows.length > 0) onScrapeWebsites(selectedRows);
-  }, [selectedRowIds, data, onScrapeWebsites]);
+  }, [selectedRowIds, filteredData, onScrapeWebsites]);
 
   const getCurrentConfig = useCallback((): TableViewConfig => {
     return {
@@ -562,6 +616,9 @@ export function DataTable({
         contactDataStats={contactDataStats}
         onGenerateCompliments={onGenerateCompliments ? handleGenerateCompliments : undefined}
         onScrapeWebsites={onScrapeWebsites ? handleScrapeWebsites : undefined}
+        emptyFieldFilters={emptyFieldFilters}
+        onEmptyFieldFiltersChange={setEmptyFieldFilters}
+        columnNameMap={fieldColumnIds}
         tableId={tableId}
         views={views}
         currentViewId={currentViewId}
@@ -696,10 +753,42 @@ export function DataTable({
 
       {/* Pagination */}
       <div className="flex items-center justify-between px-4 py-2 border-t bg-muted/30">
-        <div className="text-xs text-muted-foreground">
-          {rows.length} row(s) | Page {table.getState().pagination.pageIndex + 1} of {table.getPageCount() || 1}
+        <div className="flex items-center gap-4">
+          <div className="text-xs text-muted-foreground">
+            {rows.length} von {filteredData.length} Zeilen
+            {table.getPageCount() > 1 && ` | Seite ${table.getState().pagination.pageIndex + 1} von ${table.getPageCount()}`}
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-muted-foreground">Zeilen:</span>
+            <select
+              value={table.getState().pagination.pageSize >= filteredData.length ? "all" : table.getState().pagination.pageSize}
+              onChange={(e) => {
+                const value = e.target.value;
+                if (value === "all") {
+                  table.setPageSize(filteredData.length || 9999);
+                } else {
+                  table.setPageSize(Number(value));
+                }
+              }}
+              className="h-7 px-2 text-xs border rounded-md bg-background"
+            >
+              <option value={30}>30</option>
+              <option value={60}>60</option>
+              <option value={100}>100</option>
+              <option value="all">Alle</option>
+            </select>
+          </div>
         </div>
         <div className="flex items-center gap-1">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => table.firstPage()}
+            disabled={!table.getCanPreviousPage()}
+            className="h-7 px-2 text-xs"
+          >
+            «
+          </Button>
           <Button
             variant="outline"
             size="sm"
@@ -707,7 +796,7 @@ export function DataTable({
             disabled={!table.getCanPreviousPage()}
             className="h-7 px-2 text-xs"
           >
-            Previous
+            ‹ Zurück
           </Button>
           <Button
             variant="outline"
@@ -716,7 +805,16 @@ export function DataTable({
             disabled={!table.getCanNextPage()}
             className="h-7 px-2 text-xs"
           >
-            Next
+            Weiter ›
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => table.lastPage()}
+            disabled={!table.getCanNextPage()}
+            className="h-7 px-2 text-xs"
+          >
+            »
           </Button>
         </div>
       </div>

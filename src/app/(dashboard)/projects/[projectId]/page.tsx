@@ -9,6 +9,7 @@ import { ChevronRight, Plus, FolderKanban, Calendar } from "lucide-react";
 import { CreateTableDialog } from "@/components/projects/create-table-dialog";
 import { TableCard } from "@/components/projects/table-card";
 import { EditProjectButton } from "@/components/projects/edit-project-button";
+import { ScrapeLogSection } from "@/components/projects/scrape-log-section";
 
 interface ProjectDetailPageProps {
   params: Promise<{ projectId: string }>;
@@ -98,15 +99,15 @@ export default async function ProjectDetailPage({
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-2xl font-semibold">Tables</h2>
+            <h2 className="text-2xl font-semibold">Tabellen</h2>
             <p className="text-sm text-muted-foreground">
-              Organize your data in tables
+              Organisiere deine Daten in Tabellen
             </p>
           </div>
           <CreateTableDialog projectId={project.id}>
             <Button>
               <Plus className="mr-2 h-4 w-4" />
-              New Table
+              Neue Tabelle
             </Button>
           </CreateTableDialog>
         </div>
@@ -135,6 +136,9 @@ export default async function ProjectDetailPage({
           </div>
         )}
       </div>
+
+      {/* Failed Scrapes Section */}
+      <ScrapeLogSection projectId={project.id} />
     </div>
   );
 }

@@ -12,6 +12,7 @@ import {
   Trash2,
   EyeOff,
   Edit2,
+  Eraser,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -31,6 +32,7 @@ interface ColumnHeaderProps<TData, TValue> {
   onDelete?: () => void;
   onHide?: () => void;
   onTypeChange?: () => void;
+  onClearColumn?: () => void;
   sortable?: boolean;
   resizable?: boolean;
 }
@@ -42,6 +44,7 @@ export function ColumnHeader<TData, TValue>({
   onDelete,
   onHide,
   onTypeChange,
+  onClearColumn,
   sortable = true,
   resizable = true,
 }: ColumnHeaderProps<TData, TValue>) {
@@ -174,6 +177,12 @@ export function ColumnHeader<TData, TValue>({
             <DropdownMenuItem onClick={onHide}>
               <EyeOff className="mr-2 h-4 w-4" />
               Hide Column
+            </DropdownMenuItem>
+          )}
+          {onClearColumn && (
+            <DropdownMenuItem onClick={onClearColumn} className="text-orange-600 focus:text-orange-600">
+              <Eraser className="mr-2 h-4 w-4" />
+              Spalte leeren
             </DropdownMenuItem>
           )}
           {onDelete && (

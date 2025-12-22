@@ -139,7 +139,7 @@ export async function scrapeAndExtractContacts(
         confidence: 0,
         sourceUrl: url,
         pagesScraped: [],
-        error: mainResult.error || 'Failed to scrape URL',
+        error: mainResult.error || `Seite nicht erreichbar: ${url}`,
       };
     }
 
@@ -147,19 +147,50 @@ export async function scrapeAndExtractContacts(
 
     // Discover and scrape contact pages if enabled
     let additionalContent = '';
-    if (options.discoverContactPages && mainResult.data.links) {
-      const contactPageUrls = findContactPageUrls(mainResult.data.links, url);
+    if (options.discoverContactPages) {
+      const links = mainResult.data.links || [];
+      const contactPageUrls = findContactPageUrls(links, url);
 
-      for (const contactUrl of contactPageUrls.slice(0, 3)) {
-        const contactResult = await scrape(contactUrl, {
-          timeout: options.timeout || 30000,
-          formats: ['markdown'],
-          onlyMainContent: false,
+      // First try URLs found in links (these are more likely to exist)
+      const foundInLinks = contactPageUrls.filter(u => links.includes(u));
+      const generatedUrls = contactPageUrls.filter(u => !links.includes(u));
+
+      // Prioritize: Impressum > Kontakt > Team > Über uns > Others
+      const priorityOrder = ['impressum', 'kontakt', 'contact', 'team', 'ueber', 'about', 'ansprech'];
+      const sortByPriority = (urls: string[]) => {
+        return urls.sort((a, b) => {
+          const aIdx = priorityOrder.findIndex(p => a.toLowerCase().includes(p));
+          const bIdx = priorityOrder.findIndex(p => b.toLowerCase().includes(p));
+          return (aIdx === -1 ? 999 : aIdx) - (bIdx === -1 ? 999 : bIdx);
         });
+      };
 
-        if (contactResult.success && contactResult.data?.markdown) {
-          additionalContent += '\n\n---\n\n' + contactResult.data.markdown;
-          pagesScraped.push(contactUrl);
+      const sortedFoundLinks = sortByPriority(foundInLinks);
+      const sortedGeneratedUrls = sortByPriority(generatedUrls);
+
+      // Try found links first (up to 3), then generated URLs (up to 3 more)
+      const urlsToTry = [...sortedFoundLinks.slice(0, 3), ...sortedGeneratedUrls.slice(0, 3)];
+      let successfulPages = 0;
+      const maxSuccessfulPages = 4; // Stop after 4 successful pages
+
+      for (const contactUrl of urlsToTry) {
+        if (successfulPages >= maxSuccessfulPages) break;
+        if (pagesScraped.includes(contactUrl)) continue; // Skip if already scraped
+
+        try {
+          const contactResult = await scrape(contactUrl, {
+            timeout: options.timeout || 30000,
+            formats: ['markdown'],
+            onlyMainContent: false,
+          });
+
+          if (contactResult.success && contactResult.data?.markdown && contactResult.data.markdown.length > 100) {
+            additionalContent += '\n\n---\n\n' + contactResult.data.markdown;
+            pagesScraped.push(contactUrl);
+            successfulPages++;
+          }
+        } catch {
+          // Ignore errors for individual pages, continue trying others
         }
       }
     }
@@ -325,13 +356,22 @@ function findContactPageUrls(links: string[], baseUrl: string): string[] {
     /about/i,
     /ueber-uns/i,
     /uber-uns/i,
+    /über-uns/i,
     /team/i,
     /ansprechpartner/i,
+    /unternehmen/i,
+    /firma/i,
+    /wir-sind/i,
+    /who-we-are/i,
+    /leadership/i,
+    /management/i,
+    /geschaeftsfuehrung/i,
+    /geschäftsführung/i,
   ];
 
   const baseHost = new URL(baseUrl).hostname;
 
-  return links.filter((link) => {
+  const foundLinks = links.filter((link) => {
     try {
       const linkHost = new URL(link).hostname;
       // Only same domain
@@ -343,4 +383,75 @@ function findContactPageUrls(links: string[], baseUrl: string): string[] {
       return false;
     }
   });
+
+  // Also generate common URLs to try even if not found in links
+  const commonPaths = generateCommonContactPaths(baseUrl);
+
+  // Combine found links with generated URLs (avoid duplicates)
+  const allUrls = [...new Set([...foundLinks, ...commonPaths])];
+
+  return allUrls;
+}
+
+/**
+ * Generate common contact page URLs to try
+ * This helps find pages that aren't linked from the homepage
+ */
+function generateCommonContactPaths(baseUrl: string): string[] {
+  const parsedUrl = new URL(baseUrl);
+  const baseOrigin = parsedUrl.origin;
+
+  // Common paths for German/Austrian/Swiss business websites
+  const commonPaths = [
+    // Impressum variations
+    '/impressum',
+    '/impressum/',
+    '/impressum.html',
+    '/impressum.php',
+    '/de/impressum',
+    '/index.php/impressum',
+    '/index.php/impressum/',
+
+    // Kontakt variations
+    '/kontakt',
+    '/kontakt/',
+    '/kontakt.html',
+    '/kontakt.php',
+    '/de/kontakt',
+    '/index.php/kontakt',
+    '/index.php/kontakt/',
+    '/contact',
+    '/contact/',
+
+    // Über uns / Team variations
+    '/ueber-uns',
+    '/ueber-uns/',
+    '/uber-uns',
+    '/about',
+    '/about-us',
+    '/about/',
+    '/team',
+    '/team/',
+    '/de/team',
+    '/unser-team',
+    '/das-team',
+    '/index.php/team',
+    '/index.php/ueberuns',
+    '/index.php/ueberuns/',
+
+    // Management/Leadership
+    '/management',
+    '/geschaeftsfuehrung',
+    '/geschäftsführung',
+    '/leitung',
+    '/ansprechpartner',
+    '/ansprechpartner/',
+
+    // Unternehmen
+    '/unternehmen',
+    '/firma',
+    '/company',
+  ];
+
+  return commonPaths.map(path => baseOrigin + path);
 }

@@ -2,7 +2,7 @@
 
 import React, { useState } from "react";
 import { Table } from "@tanstack/react-table";
-import { Search, Plus, Filter, Columns3, X, Download, Trash2, Sparkles, Globe } from "lucide-react";
+import { Search, Plus, Filter, Columns3, X, Download, Trash2, Sparkles, Globe, User, Mail, Phone, FilterX } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import {
@@ -26,6 +26,9 @@ interface ContactDataStats {
   withoutContact: number;
 }
 
+// Empty field filter types
+export type EmptyFieldFilter = "vorname" | "nachname" | "email";
+
 interface TableToolbarProps<TData> {
   table: Table<TData>;
   onAddRow?: () => void;
@@ -43,6 +46,15 @@ interface TableToolbarProps<TData> {
   onGenerateCompliments?: () => void;
   // Web Scraper
   onScrapeWebsites?: () => void;
+  // Empty field filters
+  emptyFieldFilters?: EmptyFieldFilter[];
+  onEmptyFieldFiltersChange?: (filters: EmptyFieldFilter[]) => void;
+  // Column name mapping (for dynamic column names)
+  columnNameMap?: {
+    vorname?: string;
+    nachname?: string;
+    email?: string;
+  };
   // Saved Views props
   tableId?: string;
   views?: TableView[];
@@ -72,6 +84,10 @@ export function TableToolbar<TData>({
   onGenerateCompliments,
   // Web Scraper
   onScrapeWebsites,
+  // Empty field filters
+  emptyFieldFilters = [],
+  onEmptyFieldFiltersChange,
+  columnNameMap,
   // Saved Views props
   tableId,
   views = [],
@@ -88,6 +104,19 @@ export function TableToolbar<TData>({
   const showSavedViews = tableId && onViewSelect && onViewCreate && onViewUpdate && onViewDelete && onViewsRefresh && getCurrentConfig;
 
   const isFiltered = table.getState().columnFilters.length > 0;
+
+  // Empty field filter toggle
+  const toggleEmptyFieldFilter = (filter: EmptyFieldFilter) => {
+    if (!onEmptyFieldFiltersChange) return;
+
+    const newFilters = emptyFieldFilters.includes(filter)
+      ? emptyFieldFilters.filter(f => f !== filter)
+      : [...emptyFieldFilters, filter];
+
+    onEmptyFieldFiltersChange(newFilters);
+  };
+
+  const hasEmptyFieldFilters = emptyFieldFilters.length > 0;
 
   // Calculate stats
   const totalRows = table.getFilteredRowModel().rows.length;
@@ -203,6 +232,64 @@ export function TableToolbar<TData>({
               <Globe className="h-4 w-4 mr-2" />
               Websites scrapen ({selectedRowCount})
             </Button>
+          )}
+
+          {/* Empty Field Filters */}
+          {onEmptyFieldFiltersChange && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant={hasEmptyFieldFilters ? "secondary" : "outline"}
+                  size="sm"
+                  className={`h-9 ${hasEmptyFieldFilters ? "bg-orange-100 hover:bg-orange-200 text-orange-700 dark:bg-orange-950 dark:hover:bg-orange-900 dark:text-orange-300" : ""}`}
+                >
+                  <FilterX className="h-4 w-4 mr-2" />
+                  Ohne Daten
+                  {hasEmptyFieldFilters && (
+                    <Badge variant="secondary" className="ml-2 px-1.5 py-0.5 text-xs bg-orange-200 dark:bg-orange-800">
+                      {emptyFieldFilters.length}
+                    </Badge>
+                  )}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuLabel>Leere Felder filtern</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuCheckboxItem
+                  checked={emptyFieldFilters.includes("vorname")}
+                  onCheckedChange={() => toggleEmptyFieldFilter("vorname")}
+                >
+                  <User className="h-4 w-4 mr-2" />
+                  Ohne Vorname
+                </DropdownMenuCheckboxItem>
+                <DropdownMenuCheckboxItem
+                  checked={emptyFieldFilters.includes("nachname")}
+                  onCheckedChange={() => toggleEmptyFieldFilter("nachname")}
+                >
+                  <User className="h-4 w-4 mr-2" />
+                  Ohne Nachname
+                </DropdownMenuCheckboxItem>
+                <DropdownMenuCheckboxItem
+                  checked={emptyFieldFilters.includes("email")}
+                  onCheckedChange={() => toggleEmptyFieldFilter("email")}
+                >
+                  <Mail className="h-4 w-4 mr-2" />
+                  Ohne E-Mail
+                </DropdownMenuCheckboxItem>
+                {hasEmptyFieldFilters && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      onClick={() => onEmptyFieldFiltersChange([])}
+                      className="text-orange-600 focus:text-orange-600"
+                    >
+                      <X className="h-4 w-4 mr-2" />
+                      Filter zurücksetzen
+                    </DropdownMenuItem>
+                  </>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
           )}
 
           {/* Filter Toggle */}

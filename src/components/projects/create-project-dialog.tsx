@@ -26,6 +26,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { createProjectSchema, CreateProjectInput } from "@/lib/validations/project";
+import { useOrganization } from "@/lib/organization-context";
 
 interface CreateProjectDialogProps {
   children?: React.ReactNode;
@@ -35,6 +36,7 @@ export function CreateProjectDialog({ children }: CreateProjectDialogProps) {
   const [open, setOpen] = React.useState(false);
   const [isLoading, setIsLoading] = React.useState(false);
   const router = useRouter();
+  const { currentOrg } = useOrganization();
 
   const form = useForm<CreateProjectInput>({
     resolver: zodResolver(createProjectSchema),
@@ -53,7 +55,10 @@ export function CreateProjectDialog({ children }: CreateProjectDialogProps) {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(data),
+        body: JSON.stringify({
+          ...data,
+          organizationId: currentOrg?.id || null,
+        }),
       });
 
       if (!response.ok) {

@@ -86,14 +86,31 @@ export async function scrapeWithFetch(
           url,
           html: '',
           statusCode: 0,
-          error: `Request timeout after ${timeout}ms`,
+          error: `Timeout nach ${timeout / 1000}s - Seite antwortet nicht`,
         };
       }
+
+      // Translate common errors to German
+      let errorMsg = error.message;
+      if (errorMsg.includes('ENOTFOUND') || errorMsg.includes('getaddrinfo')) {
+        errorMsg = 'Domain nicht gefunden - DNS Fehler';
+      } else if (errorMsg.includes('ECONNREFUSED')) {
+        errorMsg = 'Verbindung abgelehnt - Server nicht erreichbar';
+      } else if (errorMsg.includes('ECONNRESET')) {
+        errorMsg = 'Verbindung unterbrochen';
+      } else if (errorMsg.includes('ETIMEDOUT')) {
+        errorMsg = 'Verbindungs-Timeout';
+      } else if (errorMsg.includes('certificate') || errorMsg.includes('SSL')) {
+        errorMsg = 'SSL/Zertifikat-Fehler';
+      } else if (errorMsg.includes('UNABLE_TO_VERIFY')) {
+        errorMsg = 'SSL Zertifikat ungültig';
+      }
+
       return {
         url,
         html: '',
         statusCode: 0,
-        error: `Fetch error: ${error.message}`,
+        error: errorMsg,
       };
     }
 
@@ -101,7 +118,7 @@ export async function scrapeWithFetch(
       url,
       html: '',
       statusCode: 0,
-      error: 'Unknown fetch error',
+      error: 'Unbekannter Fehler beim Abrufen',
     };
   }
 }

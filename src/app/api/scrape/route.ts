@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { z } from "zod";
 import prisma from "@/lib/prisma";
+import { ScrapeLogStatus } from "@prisma/client";
 import { verifyRowAccess } from "@/lib/security/authorization";
 import { decrypt } from "@/lib/security/encryption";
 import { notifyScrapingComplete, notifyScrapingFailed } from "@/lib/notifications";
@@ -36,8 +37,11 @@ const bulkScrapeSchema = z.object({
   useLLM: z.boolean().default(true),
   discoverContactPages: z.boolean().default(true),
   columnMappings: z.record(z.string(), z.string()).optional(),
-  maxConcurrent: z.number().min(1).max(50).default(10),
+  maxConcurrent: z.number().min(1).max(200).default(10),
   timeout: z.number().min(5000).max(120000).default(30000),
+  // Optional: Project and Table IDs for logging failed scrapes
+  projectId: z.string().optional(),
+  tableId: z.string().optional(),
 });
 
 interface ScrapeResult {
@@ -47,7 +51,7 @@ interface ScrapeResult {
   phones: string[];
   addresses: string[];
   social: Record<string, string | undefined>;
-  persons: Array<{ name?: string; position?: string; email?: string; phone?: string }>;
+  persons: Array<{ firstName?: string; lastName?: string; name?: string; position?: string; email?: string; phone?: string }>;
   pages_scraped: string[];
   error?: string;
   firstName?: string;
@@ -199,15 +203,44 @@ async function scrapeWithNodeScraper(
       };
     }
 
-    // Parse first/last name from first contact person
+    // Invalid name patterns - these are NOT real names
+    const invalidNamePatterns = /^(füllen|sie|ihr|ihre|bitte|hier|eingeben|absenden|kontakt|anfrage|nachricht|name|vorname|nachname|e-mail|email|telefon|tel|fax|adresse|straße|plz|ort|stadt|land|firma|unternehmen|gesellschaft|gmbh|ag|kg|ohg|ug|mbh|rechtsanwalt|rechtsanwältin|rechtsanwälte|notar|steuerberater|kanzlei|anwalt|fachanwalt|dr|prof|dipl|mag|mba|ll\.m|m\.a)\.?$/i;
+
+    // Validate if a name looks like a real name
+    const isValidName = (name: string | undefined): boolean => {
+      if (!name || name.length < 2) return false;
+      if (invalidNamePatterns.test(name.trim())) return false;
+      // Must start with uppercase letter (real names do)
+      if (!/^[A-ZÄÖÜ]/.test(name.trim())) return false;
+      return true;
+    };
+
+    // Get first/last name from first contact person (directly from LLM extraction)
     let firstName: string | undefined;
     let lastName: string | undefined;
     if (result.data.contactPersons.length > 0) {
-      const name = result.data.contactPersons[0].name;
-      if (name) {
-        const parts = name.trim().split(/\s+/);
-        firstName = parts[0];
-        lastName = parts.slice(1).join(" ") || undefined;
+      const person = result.data.contactPersons[0];
+      // Prefer direct firstName/lastName from LLM, but validate them
+      if (person.firstName && isValidName(person.firstName)) {
+        firstName = person.firstName;
+        if (isValidName(person.lastName)) {
+          lastName = person.lastName;
+        }
+      } else if (person.name) {
+        // Fallback: parse from name, but filter out titles and job designations
+        const name = person.name.trim();
+        // Remove common German titles and job designations
+        const cleaned = name
+          .replace(/^(Dr\.|Prof\.|Dipl\.-\w+|Mag\.|LL\.M\..*?|M\.A\.|MBA|Rechtsanwalt|Rechtsanwältin|Rechtsanwälte|Notar|Notarin|Steuerberater|Steuerberaterin|Wirtschaftsprüfer|Fachanwalt|Fachanwältin|Kanzlei|Anwalt|Anwältin)\s*/gi, '')
+          .replace(/,?\s*(LL\.M\..*?|M\.A\.|MBA|Fachanwalt.*?)$/gi, '')
+          .trim();
+        const parts = cleaned.split(/\s+/).filter(p => p.length > 1 && isValidName(p));
+        if (parts.length >= 2) {
+          firstName = parts[0];
+          lastName = parts.slice(1).join(" ");
+        } else if (parts.length === 1) {
+          lastName = parts[0];
+        }
       }
     }
 
@@ -219,7 +252,9 @@ async function scrapeWithNodeScraper(
       addresses: result.data.addresses,
       social: result.data.socialLinks,
       persons: result.data.contactPersons.map(p => ({
-        name: p.name,
+        firstName: p.firstName,
+        lastName: p.lastName,
+        name: p.name || (p.firstName && p.lastName ? `${p.firstName} ${p.lastName}` : undefined),
         position: p.position,
         email: p.email,
         phone: p.phone,
@@ -263,7 +298,7 @@ async function handleBulkScrape(
     );
   }
 
-  const { urls, useLLM, discoverContactPages, columnMappings, maxConcurrent, timeout } = validation.data;
+  const { urls, useLLM, discoverContactPages, columnMappings, maxConcurrent, timeout, projectId, tableId } = validation.data;
 
   // SECURITY: Verify user owns all rows before processing
   const rowIds = urls.filter(u => u.rowId).map(u => u.rowId as string);
@@ -309,6 +344,32 @@ async function handleBulkScrape(
     }
   }
 
+  // Get projectId from row if not provided
+  let resolvedProjectId = projectId;
+  let resolvedTableId = tableId;
+
+  if (!resolvedProjectId && rowIds.length > 0) {
+    try {
+      const firstRow = await prisma.row.findFirst({
+        where: { id: rowIds[0] },
+        select: {
+          tableId: true,
+          table: {
+            select: {
+              projectId: true,
+            },
+          },
+        },
+      });
+      if (firstRow) {
+        resolvedProjectId = firstRow.table.projectId;
+        resolvedTableId = resolvedTableId || firstRow.tableId;
+      }
+    } catch {
+      // Ignore - logging will be skipped
+    }
+  }
+
   // Process URLs in batches using our Node.js scraper
   const results: ScrapeResult[] = [];
   const urlList = urls.map(u => u.url);
@@ -318,22 +379,37 @@ async function handleBulkScrape(
     const batch = urlList.slice(i, i + maxConcurrent);
     const batchUrls = urls.slice(i, i + maxConcurrent);
 
-    const batchPromises = batch.map((url, idx) =>
-      scrapeWithNodeScraper(url, {
+    const batchPromises = batch.map((url, idx) => {
+      const startTime = Date.now();
+      return scrapeWithNodeScraper(url, {
         useLLM: useLLM && !!apiKey,
         discoverContactPages,
         llmProvider: aiProvider,
         llmApiKey: apiKey || undefined,
         timeout,
       }).then(async (result) => {
+        const processingTime = Date.now() - startTime;
         // Update cells if rowId provided
         const rowId = batchUrls[idx].rowId;
         if (rowId && columnMappings && result.success) {
           await updateCellsWithScrapeResult(rowId, result, columnMappings);
         }
+
+        // Log failed/incomplete scrapes
+        if (resolvedProjectId && (!result.firstName || !result.lastName || result.error)) {
+          await createScrapeLog(
+            resolvedProjectId,
+            resolvedTableId,
+            rowId,
+            url,
+            result,
+            processingTime
+          );
+        }
+
         return result;
-      })
-    );
+      });
+    });
 
     const batchResults = await Promise.all(batchPromises);
     results.push(...batchResults);
@@ -345,6 +421,8 @@ async function handleBulkScrape(
   const totalContacts = results.reduce((sum, r) =>
     sum + (r.emails?.length || 0) + (r.phones?.length || 0), 0
   );
+  const withNames = results.filter(r => r.firstName || r.lastName).length;
+  const withoutNames = results.length - withNames;
 
   // Send notification
   if (successful > 0) {
@@ -361,6 +439,9 @@ async function handleBulkScrape(
     successful,
     failed,
     totalContacts,
+    withNames,
+    withoutNames,
+    projectId: resolvedProjectId,
     results,
   });
 }
@@ -487,4 +568,77 @@ export async function GET() {
     ],
     engines: ["playwright", "fetch"],
   });
+}
+
+/**
+ * Create a scrape log entry for failed/incomplete scrapes
+ */
+async function createScrapeLog(
+  projectId: string,
+  tableId: string | undefined,
+  rowId: string | undefined,
+  url: string,
+  result: ScrapeResult,
+  processingTime?: number
+): Promise<void> {
+  try {
+    // Determine status based on result
+    let status: ScrapeLogStatus;
+    if (result.error) {
+      // Check error type
+      if (result.error.includes('nicht erreichbar') || result.error.includes('nicht gefunden') || result.error.includes('DNS')) {
+        status = ScrapeLogStatus.PAGE_NOT_FOUND;
+      } else if (result.error.includes('Timeout') || result.error.includes('abgelehnt')) {
+        status = ScrapeLogStatus.SCRAPE_ERROR;
+      } else {
+        status = ScrapeLogStatus.SCRAPE_ERROR;
+      }
+    } else if (!result.firstName && !result.lastName) {
+      // Check if we found some data but no name
+      if (result.emails.length > 0 || result.phones.length > 0 || result.companyName) {
+        status = ScrapeLogStatus.PARTIAL_DATA;
+      } else if (result.pages_scraped.length === 0) {
+        status = ScrapeLogStatus.NO_IMPRESSUM;
+      } else {
+        status = ScrapeLogStatus.NO_NAME_FOUND;
+      }
+    } else {
+      // Success - don't log
+      return;
+    }
+
+    // Normalize URL for deduplication
+    let normalizedUrl = url;
+    try {
+      const urlObj = new URL(url);
+      normalizedUrl = urlObj.hostname + urlObj.pathname.replace(/\/$/, "");
+    } catch {
+      // Keep original
+    }
+
+    // Create log entry
+    await prisma.scrapeLog.create({
+      data: {
+        projectId,
+        tableId,
+        rowId,
+        url,
+        normalizedUrl,
+        status,
+        error: result.error,
+        foundData: {
+          email: result.emails[0],
+          phone: result.phones[0],
+          companyName: result.companyName,
+          address: result.addresses[0],
+        },
+        pagesScraped: result.pages_scraped || [],
+        confidence: result.confidence || 0,
+        processingTime,
+      },
+    });
+  } catch (error) {
+    // Log but don't fail the scrape operation
+    console.error("Failed to create scrape log:", error);
+  }
 }

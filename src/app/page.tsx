@@ -126,8 +126,23 @@ export default async function HomePage() {
       </main>
 
       <footer className="border-t py-8">
-        <div className="container mx-auto px-4 text-center text-sm text-muted-foreground">
-          &copy; {new Date().getFullYear()} Performanty. Alle Rechte vorbehalten.
+        <div className="container mx-auto px-4">
+          <div className="flex flex-col items-center gap-4 sm:flex-row sm:justify-between">
+            <p className="text-sm text-muted-foreground">
+              &copy; {new Date().getFullYear()} Performanty. Alle Rechte vorbehalten.
+            </p>
+            <nav className="flex items-center gap-4 text-sm text-muted-foreground">
+              <Link href="/impressum" className="hover:text-foreground transition-colors">
+                Impressum
+              </Link>
+              <Link href="/datenschutz" className="hover:text-foreground transition-colors">
+                Datenschutz
+              </Link>
+              <Link href="/agb" className="hover:text-foreground transition-colors">
+                AGB
+              </Link>
+            </nav>
+          </div>
         </div>
       </footer>
     </div>

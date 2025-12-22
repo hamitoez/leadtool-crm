@@ -38,7 +38,7 @@ function sanitizeString(str: string): string {
   if (typeof str !== 'string') return String(str);
 
   // Entferne oder ersetze ungültige Zeichen
-  let sanitized = str
+  const sanitized = str
     // Entferne NULL-Bytes
     .replace(/\x00/g, '')
     // Ersetze ungültige Kontrollzeichen (außer Tab, Newline, CR)
@@ -160,7 +160,7 @@ function processValue(
 
     case ColumnType.CONFIDENCE: {
       // Confidence als Prozent oder Dezimalzahl
-      let cleaned = trimmed.replace(/%/g, "").trim();
+      const cleaned = trimmed.replace(/%/g, "").trim();
       const num = parseFloat(cleaned);
       if (isNaN(num)) return Prisma.JsonNull;
       // Wenn > 1, dann Prozent -> in Dezimal umwandeln
@@ -299,7 +299,7 @@ export async function POST(request: NextRequest) {
         position: i + batchIdx,
       }));
 
-      await prisma.row.createMany({ data: rowData });
+      await prisma.row.createMany({ data: rowData, skipDuplicates: true });
 
       // Fetch the created rows to get IDs
       const rowRecords = await prisma.row.findMany({
@@ -311,6 +311,7 @@ export async function POST(request: NextRequest) {
       });
 
       // Create cells for all rows in batch
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const cellData: Array<{
         rowId: string;
         columnId: string;
@@ -353,9 +354,10 @@ export async function POST(request: NextRequest) {
       }
 
       // Insert cells in smaller chunks to avoid memory issues
+      // Use skipDuplicates to handle retry scenarios gracefully
       for (let c = 0; c < cellData.length; c += CELL_BATCH_SIZE) {
         const cellBatch = cellData.slice(c, c + CELL_BATCH_SIZE);
-        await prisma.cell.createMany({ data: cellBatch });
+        await prisma.cell.createMany({ data: cellBatch, skipDuplicates: true });
       }
 
       importedRows += batch.length;

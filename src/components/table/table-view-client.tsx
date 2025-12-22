@@ -1,12 +1,8 @@
 "use client";
 
-import React, { useCallback, useState, useEffect, useRef } from "react";
+import React, { useCallback, useState, useEffect, Suspense, lazy } from "react";
 import { useRouter } from "next/navigation";
 import { DataTable } from "./data-table";
-import { RowDetailsSheet } from "./row-details-sheet";
-import { AIComplimentGenerator } from "./ai-compliment-generator";
-import { WebScraper, ScrapeResult } from "./web-scraper";
-import { KeyboardShortcutsDialog } from "./keyboard-shortcuts-dialog";
 import { useCellUpdate } from "@/hooks/use-cell-update";
 import { useTableShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { toast } from "sonner";
@@ -14,9 +10,24 @@ import { RowData, ColumnConfig, CellValue, TableView, TableViewConfig } from "@/
 import { AddColumnDialog } from "./add-column-dialog";
 import { QuickAddDialog } from "./quick-add-dialog";
 import { Button } from "@/components/ui/button";
-import { Plus, PlusCircle } from "lucide-react";
+import { Plus, PlusCircle, Loader2 } from "lucide-react";
 import { exportTable, getContactDataStats, ContactDataFilter, exportTableAdvanced, ExportDialogConfig } from "@/lib/export";
-import { ExportDialog, ExportConfig } from "./export-dialog";
+import type { ScrapeResult } from "./web-scraper";
+import type { ExportConfig } from "./export-dialog";
+
+// Lazy load heavy dialog components for better initial load performance
+const RowDetailsSheet = lazy(() => import("./row-details-sheet").then(m => ({ default: m.RowDetailsSheet })));
+const AIComplimentGenerator = lazy(() => import("./ai-compliment-generator").then(m => ({ default: m.AIComplimentGenerator })));
+const WebScraper = lazy(() => import("./web-scraper").then(m => ({ default: m.WebScraper })));
+const ExportDialog = lazy(() => import("./export-dialog").then(m => ({ default: m.ExportDialog })));
+const KeyboardShortcutsDialog = lazy(() => import("./keyboard-shortcuts-dialog").then(m => ({ default: m.KeyboardShortcutsDialog })));
+
+// Loading fallback for dialogs
+const DialogLoader = () => (
+  <div className="flex items-center justify-center p-8">
+    <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+  </div>
+);
 
 interface TableViewClientProps {
   initialRows: RowData[];
@@ -83,9 +94,7 @@ export function TableViewClient({
   }, [tableId]);
 
   const { updateCell, isUpdating } = useCellUpdate({
-    onSuccess: () => {
-      toast.success("Cell updated successfully");
-    },
+    // No individual toast per cell - bulk operations show their own summary toast
     onError: (err: Error) => {
       toast.error(`Failed to update cell: ${err.message}`);
     },
@@ -253,6 +262,46 @@ export function TableViewClient({
       }
     },
     [router]
+  );
+
+  const handleClearColumn = useCallback(
+    async (columnId: string) => {
+      const columnName = columns.find(c => c.id === columnId)?.name || "Spalte";
+      if (!confirm(`Alle Werte in "${columnName}" löschen? Diese Aktion kann nicht rückgängig gemacht werden.`)) return;
+
+      try {
+        const response = await fetch(`/api/tables/columns/${columnId}/clear`, {
+          method: "POST",
+        });
+
+        if (!response.ok) throw new Error("Failed to clear column");
+
+        const data = await response.json();
+        toast.success(data.message || "Spalte geleert");
+
+        // Update local state to reflect cleared values
+        setRows((prevRows) =>
+          prevRows.map((row) => {
+            if (row.cells[columnId]) {
+              return {
+                ...row,
+                cells: {
+                  ...row.cells,
+                  [columnId]: {
+                    ...row.cells[columnId],
+                    value: null,
+                  },
+                },
+              };
+            }
+            return row;
+          })
+        );
+      } catch {
+        toast.error("Fehler beim Leeren der Spalte");
+      }
+    },
+    [columns]
   );
 
   const handleAddRow = useCallback(async () => {
@@ -444,6 +493,7 @@ export function TableViewClient({
     async (results: Map<string, ScrapeResult>) => {
       // Collect all cell updates to persist to database
       const cellUpdates: Array<{ cellId: string; value: CellValue }> = [];
+      let skippedCount = 0;
 
       // Update local rows with scraped data
       setRows((prevRows) =>
@@ -459,6 +509,12 @@ export function TableViewClient({
             const cell = updatedCells[col.id];
             if (!cell) return;
 
+            // Check if cell already has a value - skip if not empty
+            const existingValue = cell.value;
+            const hasExistingValue = existingValue !== null &&
+              existingValue !== undefined &&
+              String(existingValue).trim() !== "";
+
             let newValue: CellValue | null = null;
 
             // First Name column (AI-extracted)
@@ -471,40 +527,55 @@ export function TableViewClient({
               newValue = result.lastName;
             }
 
-            // Email column
+            // Email column - only if no existing email
             if ((colNameLower.includes("email") || colNameLower.includes("e-mail")) && result.emails.length > 0) {
+              if (hasExistingValue) {
+                skippedCount++;
+                return; // Skip - email already exists
+              }
               newValue = result.emails[0];
             }
 
-            // Phone column
+            // Phone column - only if no existing phone
             if ((colNameLower.includes("phone") || colNameLower.includes("telefon") || colNameLower.includes("tel")) && result.phones.length > 0) {
+              if (hasExistingValue) {
+                skippedCount++;
+                return; // Skip - phone already exists
+              }
               newValue = result.phones[0];
             }
 
             // Address column
             if ((colNameLower.includes("address") || colNameLower.includes("adresse")) && result.addresses.length > 0) {
+              if (hasExistingValue) {
+                skippedCount++;
+                return;
+              }
               newValue = result.addresses[0];
             }
 
             // LinkedIn column
             if (colNameLower.includes("linkedin") && result.social.linkedin) {
+              if (hasExistingValue) return;
               newValue = result.social.linkedin;
             }
 
             // Facebook column
             if (colNameLower.includes("facebook") && result.social.facebook) {
+              if (hasExistingValue) return;
               newValue = result.social.facebook;
             }
 
             // Instagram column
             if (colNameLower.includes("instagram") && result.social.instagram) {
+              if (hasExistingValue) return;
               newValue = result.social.instagram;
             }
 
             // Contact name column
             if ((colNameLower.includes("kontakt") || colNameLower.includes("ansprech") || colNameLower.includes("contact")) && result.persons.length > 0) {
               const person = result.persons[0];
-              if (person.name) {
+              if (person.name && !hasExistingValue) {
                 newValue = person.name;
               }
             }
@@ -512,7 +583,7 @@ export function TableViewClient({
             // Position column
             if ((colNameLower.includes("position") || colNameLower.includes("titel") || colNameLower.includes("role")) && result.persons.length > 0) {
               const person = result.persons[0];
-              if (person.position) {
+              if (person.position && !hasExistingValue) {
                 newValue = person.position;
               }
             }
@@ -528,10 +599,8 @@ export function TableViewClient({
         })
       );
 
-      // Persist all cell updates to database
+      // Persist all cell updates to database (silently, no individual notifications)
       if (cellUpdates.length > 0) {
-        toast.info(`Speichere ${cellUpdates.length} Zellen...`);
-
         // Update cells in parallel batches
         const batchSize = 10;
         for (let i = 0; i < cellUpdates.length; i += batchSize) {
@@ -543,7 +612,18 @@ export function TableViewClient({
       }
 
       setIsWebScraperOpen(false);
-      toast.success(`${results.size} Websites gescraped und gespeichert`);
+
+      // Single summary notification
+      const successCount = Array.from(results.values()).filter(r => r.success).length;
+      let message = `${successCount} Websites gescraped`;
+      if (cellUpdates.length > 0) {
+        message += `, ${cellUpdates.length} Zellen aktualisiert`;
+      }
+      if (skippedCount > 0) {
+        message += ` (${skippedCount} übersprungen)`;
+      }
+      toast.success(message);
+
       router.refresh();
     },
     [columns, router, updateCell]
@@ -690,6 +770,7 @@ export function TableViewClient({
         onColumnRename={handleColumnRename}
         onColumnDelete={handleColumnDelete}
         onColumnHide={handleColumnHide}
+        onClearColumn={handleClearColumn}
         onAddRow={handleAddRow}
         onRowDelete={handleRowDelete}
         onBulkRowDelete={handleBulkRowDelete}
@@ -720,49 +801,69 @@ export function TableViewClient({
         onViewsRefresh={handleViewsRefresh}
       />
 
-      {/* Row Details Sheet */}
-      <RowDetailsSheet
-        open={isRowDetailsOpen}
-        onOpenChange={setIsRowDetailsOpen}
-        row={selectedRow}
-        columns={columns}
-        onCellUpdate={handleCellUpdateInSheet}
-        onClose={handleRowDetailsClose}
-      />
+      {/* Row Details Sheet - Lazy loaded */}
+      {isRowDetailsOpen && (
+        <Suspense fallback={<DialogLoader />}>
+          <RowDetailsSheet
+            open={isRowDetailsOpen}
+            onOpenChange={setIsRowDetailsOpen}
+            row={selectedRow}
+            columns={columns}
+            onCellUpdate={handleCellUpdateInSheet}
+            onClose={handleRowDetailsClose}
+          />
+        </Suspense>
+      )}
 
-      {/* AI Compliment Generator */}
-      <AIComplimentGenerator
-        open={isAIGeneratorOpen}
-        onOpenChange={setIsAIGeneratorOpen}
-        rows={selectedRowsForAI}
-        columns={columns}
-        onBulkComplete={handleBulkComplimentsComplete}
-      />
+      {/* AI Compliment Generator - Lazy loaded */}
+      {isAIGeneratorOpen && (
+        <Suspense fallback={<DialogLoader />}>
+          <AIComplimentGenerator
+            open={isAIGeneratorOpen}
+            onOpenChange={setIsAIGeneratorOpen}
+            rows={selectedRowsForAI}
+            columns={columns}
+            onBulkComplete={handleBulkComplimentsComplete}
+          />
+        </Suspense>
+      )}
 
-      {/* Web Scraper */}
-      <WebScraper
-        open={isWebScraperOpen}
-        onOpenChange={setIsWebScraperOpen}
-        rows={selectedRowsForScraper}
-        columns={columns}
-        onScrapeComplete={handleScrapeComplete}
-      />
+      {/* Web Scraper - Lazy loaded */}
+      {isWebScraperOpen && (
+        <Suspense fallback={<DialogLoader />}>
+          <WebScraper
+            open={isWebScraperOpen}
+            onOpenChange={setIsWebScraperOpen}
+            rows={selectedRowsForScraper}
+            columns={columns}
+            onScrapeComplete={handleScrapeComplete}
+          />
+        </Suspense>
+      )}
 
-      {/* Export Dialog */}
-      <ExportDialog
-        open={isExportDialogOpen}
-        onOpenChange={setIsExportDialogOpen}
-        rows={rows}
-        columns={columns}
-        tableName={tableName}
-        onExport={handleExportFromDialog}
-      />
+      {/* Export Dialog - Lazy loaded */}
+      {isExportDialogOpen && (
+        <Suspense fallback={<DialogLoader />}>
+          <ExportDialog
+            open={isExportDialogOpen}
+            onOpenChange={setIsExportDialogOpen}
+            rows={rows}
+            columns={columns}
+            tableName={tableName}
+            onExport={handleExportFromDialog}
+          />
+        </Suspense>
+      )}
 
-      {/* Keyboard Shortcuts Dialog */}
-      <KeyboardShortcutsDialog
-        open={isShortcutsDialogOpen}
-        onOpenChange={setIsShortcutsDialogOpen}
-      />
+      {/* Keyboard Shortcuts Dialog - Lazy loaded */}
+      {isShortcutsDialogOpen && (
+        <Suspense fallback={<DialogLoader />}>
+          <KeyboardShortcutsDialog
+            open={isShortcutsDialogOpen}
+            onOpenChange={setIsShortcutsDialogOpen}
+          />
+        </Suspense>
+      )}
 
       {/* Quick Add Dialog (for keyboard shortcut) */}
       <QuickAddDialog

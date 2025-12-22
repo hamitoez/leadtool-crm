@@ -35,10 +35,290 @@ model User {
   passwordResetTokens PasswordResetToken[]
   notifications       Notification[]
 
+  // CRM Phase 1 Relations
+  activities     Activity[]
+  reminders      Reminder[]
+  contactHistory ContactHistory[]
+
+  // CRM Phase 2 Relations
+  emailAccounts  EmailAccount[]
+  emailTemplates EmailTemplate[]
+  followUpRules  FollowUpRule[]
+  workflows      Workflow[]
+  callScripts    CallScript[]
+  noteTemplates  NoteTemplate[]
+
+  // Email Marketing
+  campaigns      Campaign[]
+
+  // Phase 4: Organizations
+  organizationMemberships OrganizationMember[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@map("users")
+}
+
+// ============================================
+// ORGANIZATIONS & TEAMS (Phase 4)
+// ============================================
+
+enum OrganizationRole {
+  OWNER      // Volle Rechte, kann Organisation löschen
+  ADMIN      // Kann Mitglieder verwalten, alle Daten bearbeiten
+  MANAGER    // Kann Projekte/Pipelines verwalten
+  MEMBER     // Kann zugewiesene Daten bearbeiten
+}
+
+model Organization {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique  // URL-freundlicher Name
+  description String?
+  logo        String?  // URL zum Logo
+
+  // Billing & Plan (für spätere Erweiterung)
+  plan        String   @default("free") // free, starter, professional, enterprise
+  maxMembers  Int      @default(5)
+
+  // SMTP E-Mail-Einstellungen
+  smtpHost     String?
+  smtpPort     Int?      @default(587)
+  smtpSecure   Boolean   @default(false)
+  smtpUser     String?
+  smtpPassword String?   // Encrypted
+  smtpFrom     String?   // Absender-E-Mail
+  smtpFromName String?   // Absender-Name
+
+  // Settings
+  settings    Json     @default("{}")
+
+  members       OrganizationMember[]
+  invites       OrganizationInvite[]
+  projects      Project[]
+  apiKeys       ApiKey[]
+  webhooks      Webhook[]
+  emailAccounts EmailAccount[]
+  campaigns     Campaign[]
+  inboundEmailSettings InboundEmailSettings?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([slug])
+  @@map("organizations")
+}
+
+// ============================================
+// API KEYS (Phase 4: External Integrations)
+// ============================================
+
+model ApiKey {
+  id             String    @id @default(cuid())
+  organizationId String
+
+  name           String    // Beschreibender Name (z.B. "Zapier Integration")
+  keyHash        String    @unique // Gehashter API-Key (SHA-256)
+  keyPrefix      String    // Erste 8 Zeichen für Anzeige (z.B. "ldt_abc1...")
+
+  // Berechtigungen
+  permissions    Json      @default("{\"leads\": {\"read\": true, \"write\": true}, \"deals\": {\"read\": true, \"write\": true}, \"activities\": {\"read\": true, \"write\": true}}")
+  scopes         String[]  @default(["leads:read", "leads:write", "deals:read", "deals:write"])
+
+  // Rate Limiting
+  rateLimit      Int       @default(1000) // Requests pro Stunde
+
+  // Tracking
+  lastUsedAt     DateTime?
+  requestCount   Int       @default(0)
+
+  // Status
+  isActive       Boolean   @default(true)
+  expiresAt      DateTime? // Optional: Ablaufdatum
+
+  // Audit
+  createdBy      String    // User ID des Erstellers
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([organizationId])
+  @@index([keyHash])
+  @@index([isActive])
+  @@map("api_keys")
+}
+
+// ============================================
+// WEBHOOKS (Phase 4: External Integrations)
+// ============================================
+
+enum WebhookEvent {
+  // Lead Events
+  LEAD_CREATED
+  LEAD_UPDATED
+  LEAD_DELETED
+
+  // Deal Events
+  DEAL_CREATED
+  DEAL_UPDATED
+  DEAL_DELETED
+  DEAL_STAGE_CHANGED
+  DEAL_WON
+  DEAL_LOST
+
+  // Activity Events
+  ACTIVITY_CREATED
+  ACTIVITY_COMPLETED
+
+  // Pipeline Events
+  PIPELINE_CREATED
+  STAGE_CREATED
+}
+
+model Webhook {
+  id             String    @id @default(cuid())
+  organizationId String
+
+  name           String    // Beschreibender Name
+  url            String    // Ziel-URL für POST requests
+  secret         String?   // Optionaler Secret für HMAC-Signatur
+
+  // Events die ausgelöst werden
+  events         WebhookEvent[]
+
+  // Headers die mitgesendet werden
+  headers        Json      @default("{}")
+
+  // Status
+  isActive       Boolean   @default(true)
+
+  // Retry-Konfiguration
+  maxRetries     Int       @default(3)
+  retryDelay     Int       @default(60)  // Sekunden zwischen Retries
+
+  // Stats
+  successCount   Int       @default(0)
+  failureCount   Int       @default(0)
+  lastTriggeredAt DateTime?
+  lastSuccessAt  DateTime?
+  lastFailureAt  DateTime?
+
+  // Audit
+  createdBy      String    // User ID des Erstellers
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  logs           WebhookLog[]
+
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([organizationId])
+  @@index([isActive])
+  @@map("webhooks")
+}
+
+model WebhookLog {
+  id          String   @id @default(cuid())
+  webhookId   String
+
+  // Event Details
+  event       WebhookEvent
+  payload     Json     // Gesendete Daten
+
+  // Request Details
+  requestUrl  String
+  requestHeaders Json  @default("{}")
+
+  // Response Details
+  responseStatus Int?
+  responseBody   String? @db.Text
+  responseTime   Int?    // ms
+
+  // Status
+  status      String   // "success", "failed", "pending", "retrying"
+  error       String?
+  retryCount  Int      @default(0)
+  nextRetryAt DateTime?
+
+  webhook     Webhook  @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+
+  createdAt   DateTime @default(now())
+
+  @@index([webhookId])
+  @@index([webhookId, createdAt])
+  @@index([status])
+  @@map("webhook_logs")
+}
+
+model OrganizationMember {
+  id             String           @id @default(cuid())
+  organizationId String
+  userId         String
+  role           OrganizationRole @default(MEMBER)
+
+  // Permissions (feinere Kontrolle)
+  permissions    Json             @default("{}") // z.B. { canExport: true, canDelete: false }
+
+  // Status
+  isActive       Boolean          @default(true)
+
+  // Tracking
+  invitedBy      String?          // User ID des Einladenden
+  joinedAt       DateTime         @default(now())
+  lastActiveAt   DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([organizationId, userId])
+  @@index([organizationId])
+  @@index([userId])
+  @@index([organizationId, role])
+  @@map("organization_members")
+}
+
+enum InviteStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+  REVOKED
+}
+
+model OrganizationInvite {
+  id             String           @id @default(cuid())
+  organizationId String
+
+  // Invite Details
+  email          String
+  role           OrganizationRole @default(MEMBER)
+  status         InviteStatus     @default(PENDING)
+
+  // Token für Einladungslink
+  token          String           @unique @default(cuid())
+
+  // Tracking
+  invitedBy      String           // User ID des Einladenden
+  expiresAt      DateTime
+  acceptedAt     DateTime?
+
+  // Personal message
+  message        String?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId])
+  @@index([token])
+  @@index([email])
+  @@index([organizationId, status])
+  @@map("organization_invites")
 }
 
 // ============================================
@@ -67,6 +347,13 @@ model UserSettings {
   notifyImportComplete   Boolean @default(true)
   notifyImportFailed     Boolean @default(true)
   emailNotifications     Boolean @default(false)
+
+  // Reminder Settings
+  defaultReminderBefore Int     @default(15)  // Minutes before activity
+  quietHoursEnabled     Boolean @default(false)
+  quietHoursStart       String  @default("22:00")
+  quietHoursEnd         String  @default("08:00")
+  workDays              Json    @default("[1,2,3,4,5]") // Mon-Fri
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -162,20 +449,25 @@ model TwoFactorBackupCode {
 // ============================================
 
 model Project {
-  id          String  @id @default(cuid())
-  userId      String
-  name        String
-  description String?
-  settings    Json    @default("{}")
+  id             String  @id @default(cuid())
+  userId         String
+  organizationId String? // Optional: Projekt gehört zu einer Organisation
+  name           String
+  description    String?
+  settings       Json    @default("{}")
 
-  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tables Table[]
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  tables       Table[]
+  scrapeLogs   ScrapeLog[]
+  pipelines    Pipeline[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([userId])
   @@index([userId, createdAt])
+  @@index([organizationId])
   @@index([updatedAt])
   @@map("projects")
 }
@@ -290,6 +582,15 @@ model Row {
   table      Table       @relation(fields: [tableId], references: [id], onDelete: Cascade)
   cells      Cell[]
   extraction Extraction?
+
+  // CRM Phase 1 Relations
+  deal           Deal?
+  activities     Activity[]
+  reminders      Reminder[]
+  contactHistory ContactHistory[]
+
+  // CRM Phase 2 Relations
+  emails         EmailMessage[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -497,4 +798,1265 @@ model ProcessingJob {
   @@index([status])
   @@index([queueName])
   @@map("processing_jobs")
+}
+
+// ============================================
+// SCRAPE LOG (Failed/Incomplete Scrapes)
+// ============================================
+
+enum ScrapeLogStatus {
+  NO_NAME_FOUND      // Kein Vor-/Nachname gefunden
+  PARTIAL_DATA       // Nur teilweise Daten
+  SCRAPE_ERROR       // Technischer Fehler beim Scrapen
+  PAGE_NOT_FOUND     // Seite nicht erreichbar
+  NO_IMPRESSUM       // Kein Impressum gefunden
+}
+
+model ScrapeLog {
+  id        String @id @default(cuid())
+  projectId String
+  tableId   String?
+  rowId     String?
+
+  // Scraped URL
+  url           String
+  normalizedUrl String
+
+  // Status & Error
+  status  ScrapeLogStatus
+  error   String?
+
+  // What was found (partial data)
+  foundData Json @default("{}")  // { email?: string, phone?: string, company?: string, etc. }
+
+  // Pages that were tried
+  pagesScraped Json @default("[]")  // Array of URLs that were attempted
+
+  // Confidence score (0-1)
+  confidence Float @default(0)
+
+  // Processing info
+  processingTime Int?  // in ms
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([projectId])
+  @@index([projectId, status])
+  @@index([projectId, createdAt])
+  @@index([status])
+  @@map("scrape_logs")
+}
+
+// ============================================
+// CRM PHASE 1: PIPELINE & KANBAN
+// ============================================
+
+enum StageType {
+  OPEN   // Normal open stage
+  WON    // Deal won
+  LOST   // Deal lost
+}
+
+model Pipeline {
+  id        String  @id @default(cuid())
+  projectId String
+  name      String
+  isDefault Boolean @default(false)
+
+  project Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  stages  PipelineStage[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([projectId])
+  @@map("pipelines")
+}
+
+model PipelineStage {
+  id         String    @id @default(cuid())
+  pipelineId String
+  name       String
+  color      String    @default("#6B7280")
+  position   Int
+  stageType  StageType @default(OPEN)
+
+  // Automation
+  autoMoveAfterDays Int? // Auto-move if no activity
+
+  pipeline Pipeline @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  deals    Deal[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([pipelineId])
+  @@map("pipeline_stages")
+}
+
+model Deal {
+  id      String @id @default(cuid())
+  rowId   String @unique
+  stageId String
+
+  // Deal-specific data
+  value         Float?   // Estimated value in EUR
+  currency      String   @default("EUR")
+  probability   Int      @default(50) // Close probability 0-100%
+  expectedClose DateTime? // Expected close date
+
+  // Position in stage (for sorting)
+  position Int
+
+  // Timestamps for stage changes
+  stageChangedAt DateTime @default(now())
+  wonAt          DateTime?
+  lostAt         DateTime?
+  lostReason     String?
+
+  row   Row           @relation(fields: [rowId], references: [id], onDelete: Cascade)
+  stage PipelineStage @relation(fields: [stageId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([stageId])
+  @@index([rowId])
+  @@index([stageId, position])
+  @@map("deals")
+}
+
+// ============================================
+// CRM PHASE 1: ACTIVITIES & TASKS
+// ============================================
+
+enum ActivityType {
+  CALL
+  EMAIL
+  MEETING
+  NOTE
+  TASK
+  DOCUMENT
+  STATUS_CHANGE
+  COMMENT
+  DEAL_CREATED
+  DEAL_WON
+  DEAL_LOST
+  STAGE_CHANGED
+}
+
+enum ActivityStatus {
+  PLANNED
+  COMPLETED
+  CANCELLED
+  MISSED
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+model Activity {
+  id     String @id @default(cuid())
+  rowId  String
+  userId String
+
+  type   ActivityType
+  status ActivityStatus @default(COMPLETED)
+
+  // Content
+  title       String
+  description String? @db.Text
+
+  // For Tasks
+  priority    TaskPriority?
+  dueDate     DateTime?
+  completedAt DateTime?
+
+  // For Calls
+  callDuration Int?    // Seconds
+  callOutcome  String?
+
+  // For Meetings
+  meetingLocation String?
+  meetingLink     String?
+  meetingDuration Int?  // Minutes
+  attendees       Json? // Array of emails
+
+  // For Emails
+  emailSubject String?
+  emailTo      String?
+  emailCc      String?
+
+  // For Documents
+  documentUrl  String?
+  documentName String?
+  documentType String?
+
+  // Automatic activities
+  isAutomatic Boolean @default(false)
+  metadata    Json    @default("{}")
+
+  row  Row  @relation(fields: [rowId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id])
+
+  // Reminders for this activity
+  reminders Reminder[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([rowId])
+  @@index([userId])
+  @@index([type])
+  @@index([status])
+  @@index([dueDate])
+  @@index([rowId, createdAt])
+  @@map("activities")
+}
+
+// ============================================
+// CRM PHASE 1: REMINDERS
+// ============================================
+
+enum ReminderType {
+  BEFORE_ACTIVITY
+  FOLLOW_UP
+  CUSTOM
+  RECURRING
+  DEADLINE
+}
+
+enum ReminderStatus {
+  PENDING
+  SENT
+  DISMISSED
+  SNOOZED
+  COMPLETED
+}
+
+model Reminder {
+  id         String  @id @default(cuid())
+  userId     String
+  activityId String?
+  rowId      String?
+
+  type   ReminderType
+  status ReminderStatus @default(PENDING)
+
+  // When to remind
+  remindAt DateTime
+
+  // Content
+  title   String
+  message String?
+
+  // For recurring reminders
+  isRecurring    Boolean   @default(false)
+  recurringRule  String?   // RRULE format
+  nextOccurrence DateTime?
+
+  // Snooze
+  snoozedUntil DateTime?
+  snoozeCount  Int       @default(0)
+
+  // Tracking
+  sentAt      DateTime?
+  dismissedAt DateTime?
+  completedAt DateTime?
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  activity Activity? @relation(fields: [activityId], references: [id], onDelete: Cascade)
+  row      Row?      @relation(fields: [rowId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, status])
+  @@index([userId, remindAt])
+  @@index([status, remindAt])
+  @@map("reminders")
+}
+
+// ============================================
+// CRM PHASE 2: EMAIL INTEGRATION
+// ============================================
+
+enum EmailAccountType {
+  SMTP_IMAP    // Standard SMTP/IMAP
+  GMAIL        // Gmail OAuth
+  OUTLOOK      // Microsoft OAuth
+}
+
+enum EmailStatus {
+  DRAFT        // Entwurf
+  QUEUED       // In Warteschlange
+  SENDING      // Wird gesendet
+  SENT         // Gesendet
+  DELIVERED    // Zugestellt
+  OPENED       // Geoeffnet (Tracking)
+  CLICKED      // Link geklickt (Tracking)
+  BOUNCED      // Nicht zustellbar
+  FAILED       // Fehler beim Senden
+}
+
+enum EmailDirection {
+  INBOUND      // Empfangen
+  OUTBOUND     // Gesendet
+}
+
+model EmailAccount {
+  id             String  @id @default(cuid())
+  userId         String
+  organizationId String? // Optional: Account gehört zu einer Organisation
+
+  // Account Info
+  name         String           // z.B. "Firmen-E-Mail"
+  email        String           // E-Mail-Adresse
+  accountType  EmailAccountType @default(SMTP_IMAP)
+  isDefault    Boolean          @default(false)
+  isActive     Boolean          @default(true)
+
+  // SMTP Settings (encrypted)
+  smtpHost     String?
+  smtpPort     Int?             @default(587)
+  smtpSecure   Boolean          @default(true)  // TLS
+  smtpUser     String?
+  smtpPassword String?          // Encrypted
+
+  // IMAP Settings (encrypted)
+  imapHost     String?
+  imapPort     Int?             @default(993)
+  imapSecure   Boolean          @default(true)
+  imapUser     String?
+  imapPassword String?          // Encrypted
+
+  // OAuth Tokens (for Gmail/Outlook)
+  accessToken  String?          @db.Text
+  refreshToken String?          @db.Text
+  tokenExpiry  DateTime?
+
+  // Sync Settings
+  lastSyncAt   DateTime?
+  syncEnabled  Boolean          @default(true)
+
+  // Signature
+  signature    String?          @db.Text
+
+  // ============================================
+  // EMAIL MARKETING FIELDS
+  // ============================================
+
+  // Sending Limits
+  dailyLimit        Int      @default(50)    // Max E-Mails pro Tag
+  sentToday         Int      @default(0)     // Heute gesendet
+  sentTotal         Int      @default(0)     // Gesamt gesendet
+  lastResetAt       DateTime @default(now()) // Wann wurde sentToday zurückgesetzt
+
+  // Health Score (0-100)
+  healthScore       Int      @default(100)
+  lastHealthCheckAt DateTime?
+
+  // DNS Validation
+  spfValid          Boolean?
+  dkimValid         Boolean?
+  dmarcValid        Boolean?
+  dnsCheckedAt      DateTime?
+  dnsError          String?                  // Letzte DNS-Fehlermeldung
+
+  // Connection Test
+  smtpVerified      Boolean  @default(false)
+  imapVerified      Boolean  @default(false)
+  lastVerifiedAt    DateTime?
+  verificationError String?                  // Letzte Verbindungs-Fehlermeldung
+
+  // Warmup (für Phase 6)
+  warmupEnabled     Boolean  @default(false)
+  warmupDay         Int      @default(0)     // Tag im Warmup-Zyklus
+  warmupDailyTarget Int      @default(0)     // Aktuelle Warmup-Mails/Tag
+  warmupStartedAt   DateTime?
+
+  // Bounce Tracking
+  bounceCount       Int      @default(0)
+  lastBounceAt      DateTime?
+  isBlocked         Boolean  @default(false) // Auto-blocked bei zu vielen Bounces
+  blockedReason     String?
+
+  user              User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization      Organization?  @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  emails            EmailMessage[]
+  campaignSentEmails CampaignSentEmail[]
+  campaignReplies   CampaignReply[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([userId, isDefault])
+  @@index([organizationId])
+  @@index([isActive, isBlocked])
+  @@map("email_accounts")
+}
+
+model EmailMessage {
+  id             String  @id @default(cuid())
+  emailAccountId String
+  rowId          String? // Verknuepfung zum Kontakt
+
+  // Message IDs
+  messageId      String? @unique // Message-ID Header
+  inReplyTo      String?         // Antwort auf
+  threadId       String?         // E-Mail-Thread
+
+  // Email Content
+  direction      EmailDirection
+  status         EmailStatus     @default(DRAFT)
+
+  fromEmail      String
+  fromName       String?
+  toEmail        String
+  toName         String?
+  ccEmail        String?
+  bccEmail       String?
+  replyTo        String?
+
+  subject        String
+  bodyHtml       String?         @db.Text
+  bodyText       String?         @db.Text
+
+  // Attachments
+  attachments    Json            @default("[]") // Array of {name, url, size, type}
+
+  // Template
+  templateId     String?
+
+  // Tracking
+  trackingId     String?         @unique @default(cuid()) // Unique ID for tracking pixel
+  openCount      Int             @default(0)
+  clickCount     Int             @default(0)
+  lastOpenedAt   DateTime?
+  lastClickedAt  DateTime?
+  isReplied      Boolean         @default(false)
+  repliedAt      DateTime?
+
+  // Scheduling
+  scheduledAt    DateTime?
+  sentAt         DateTime?
+
+  // Error
+  errorMessage   String?
+
+  // Metadata
+  headers        Json            @default("{}")
+  metadata       Json            @default("{}")
+
+  emailAccount EmailAccount   @relation(fields: [emailAccountId], references: [id], onDelete: Cascade)
+  row          Row?           @relation(fields: [rowId], references: [id], onDelete: SetNull)
+  template     EmailTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([emailAccountId])
+  @@index([rowId])
+  @@index([threadId])
+  @@index([status])
+  @@index([direction, createdAt])
+  @@map("email_messages")
+}
+
+model EmailTemplate {
+  id     String @id @default(cuid())
+  userId String
+
+  // Template Info
+  name        String
+  description String?
+  category    String?          // z.B. "Follow-up", "Erstkontakt", "Angebot"
+
+  // Content
+  subject     String
+  bodyHtml    String           @db.Text
+  bodyText    String?          @db.Text
+
+  // Variables
+  variables   Json             @default("[]") // Array of variable names
+
+  // Usage Stats
+  usageCount  Int              @default(0)
+  lastUsedAt  DateTime?
+
+  // Status
+  isActive    Boolean          @default(true)
+
+  user   User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  emails EmailMessage[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([userId, category])
+  @@map("email_templates")
+}
+
+// ============================================
+// CRM PHASE 2: AUTOMATION & FOLLOW-UPS
+// ============================================
+
+enum FollowUpTrigger {
+  DEAL_CREATED           // Neuer Deal erstellt
+  STAGE_CHANGED          // Stage gewechselt
+  NO_ACTIVITY            // Keine Aktivitaet seit X Tagen
+  EMAIL_OPENED           // E-Mail geoeffnet
+  EMAIL_NOT_OPENED       // E-Mail nicht geoeffnet nach X Tagen
+  EMAIL_CLICKED          // Link in E-Mail geklickt
+  TASK_OVERDUE           // Task ueberfaellig
+  MEETING_SCHEDULED      // Meeting geplant
+  MEETING_COMPLETED      // Meeting abgeschlossen
+  CALL_COMPLETED         // Anruf abgeschlossen
+  MANUAL                 // Manuell ausgeloest
+}
+
+enum FollowUpAction {
+  SEND_EMAIL             // E-Mail senden
+  CREATE_TASK            // Task erstellen
+  CREATE_REMINDER        // Erinnerung erstellen
+  MOVE_STAGE             // Stage aendern
+  ADD_NOTE               // Notiz hinzufuegen
+  NOTIFY_USER            // Benutzer benachrichtigen
+}
+
+model FollowUpRule {
+  id        String  @id @default(cuid())
+  userId    String
+
+  // Rule Info
+  name        String
+  description String?
+  isActive    Boolean @default(true)
+
+  // Trigger
+  trigger     FollowUpTrigger
+  triggerConfig Json   @default("{}") // z.B. { daysOfInactivity: 3, stageId: "..." }
+
+  // Conditions
+  conditions  Json    @default("[]") // Array of conditions
+
+  // Action
+  action      FollowUpAction
+  actionConfig Json   @default("{}") // z.B. { templateId: "...", subject: "...", delay: 24 }
+
+  // Delay
+  delayMinutes Int    @default(0)    // Verzoegerung vor Ausfuehrung
+
+  // Scope
+  pipelineId  String?               // Nur fuer bestimmte Pipeline
+  stageIds    Json    @default("[]") // Nur fuer bestimmte Stages
+
+  // Stats
+  executionCount Int  @default(0)
+  lastExecutedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([userId, isActive])
+  @@index([trigger])
+  @@map("follow_up_rules")
+}
+
+model AutomationLog {
+  id          String @id @default(cuid())
+  ruleId      String
+  rowId       String?
+  dealId      String?
+
+  // Execution Info
+  trigger     FollowUpTrigger
+  action      FollowUpAction
+  status      String            // "success", "failed", "skipped"
+
+  // Details
+  triggerData Json              @default("{}")
+  actionData  Json              @default("{}")
+  result      Json              @default("{}")
+  error       String?
+
+  // Timing
+  executedAt  DateTime          @default(now())
+
+  @@index([ruleId])
+  @@index([rowId])
+  @@index([executedAt])
+  @@map("automation_logs")
+}
+
+// ============================================
+// CRM PHASE 1: CONTACT HISTORY
+// ============================================
+
+enum HistoryEventType {
+  // Manual events
+  CREATED
+  UPDATED
+  DELETED
+
+  // Activities
+  CALL_LOGGED
+  EMAIL_SENT
+  EMAIL_RECEIVED
+  MEETING_SCHEDULED
+  MEETING_COMPLETED
+  NOTE_ADDED
+  TASK_CREATED
+  TASK_COMPLETED
+  DOCUMENT_UPLOADED
+
+  // Pipeline
+  DEAL_CREATED
+  STAGE_CHANGED
+  DEAL_WON
+  DEAL_LOST
+  VALUE_CHANGED
+  PROBABILITY_CHANGED
+
+  // Data
+  FIELD_CHANGED
+  SCRAPED
+  MERGED
+
+  // System
+  REMINDER_SENT
+  AUTO_MOVED
+  IMPORTED
+}
+
+model ContactHistory {
+  id     String  @id @default(cuid())
+  rowId  String
+  userId String?
+
+  eventType HistoryEventType
+
+  // What was changed
+  fieldName String?
+  oldValue  Json?
+  newValue  Json?
+
+  // Context
+  title       String
+  description String?
+  metadata    Json    @default("{}")
+
+  // Relations
+  activityId String?
+
+  row  Row   @relation(fields: [rowId], references: [id], onDelete: Cascade)
+  user User? @relation(fields: [userId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([rowId])
+  @@index([rowId, createdAt])
+  @@index([eventType])
+  @@map("contact_history")
+}
+
+// ============================================
+// CRM PHASE 2: VISUAL WORKFLOW EDITOR
+// ============================================
+
+model Workflow {
+  id             String   @id @default(cuid())
+  userId         String
+  name           String
+  description    String?
+  isActive       Boolean  @default(false)
+  viewport       Json     @default("{\"x\": 0, \"y\": 0, \"zoom\": 1}")
+  executionCount Int      @default(0)
+  lastExecutedAt DateTime?
+  pipelineId     String?
+
+  user       User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  nodes      WorkflowNode[]
+  edges      WorkflowEdge[]
+  executions WorkflowExecution[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([userId, isActive])
+  @@map("workflows")
+}
+
+enum WorkflowNodeType {
+  TRIGGER
+  ACTION
+  CONDITION
+  DELAY
+}
+
+model WorkflowNode {
+  id         String           @id @default(cuid())
+  workflowId String
+  nodeType   WorkflowNodeType
+  subType    String           // z.B. "DEAL_CREATED", "SEND_EMAIL"
+  label      String?
+  positionX  Float
+  positionY  Float
+  config     Json             @default("{}")
+
+  workflow      Workflow       @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  outgoingEdges WorkflowEdge[] @relation("SourceNode")
+  incomingEdges WorkflowEdge[] @relation("TargetNode")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([workflowId])
+  @@map("workflow_nodes")
+}
+
+model WorkflowEdge {
+  id           String  @id @default(cuid())
+  workflowId   String
+  sourceNodeId String
+  targetNodeId String
+  sourceHandle String?
+  targetHandle String?
+  label        String?
+
+  workflow   Workflow     @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  sourceNode WorkflowNode @relation("SourceNode", fields: [sourceNodeId], references: [id], onDelete: Cascade)
+  targetNode WorkflowNode @relation("TargetNode", fields: [targetNodeId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([sourceNodeId, targetNodeId, sourceHandle])
+  @@index([workflowId])
+  @@map("workflow_edges")
+}
+
+model WorkflowExecution {
+  id          String    @id @default(cuid())
+  workflowId  String
+  rowId       String?
+  dealId      String?
+  status      String    // "running", "completed", "failed"
+  trace       Json      @default("[]")
+  startedAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  workflow Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+
+  @@index([workflowId])
+  @@index([status])
+  @@map("workflow_executions")
+}
+
+// ============================================
+// CRM PHASE 2: CALL SCRIPTS
+// ============================================
+
+model CallScript {
+  id          String  @id @default(cuid())
+  userId      String
+  name        String
+  description String?
+  category    String? // z.B. "Erstkontakt", "Follow-up", "Qualifizierung"
+
+  // Script Content
+  introduction   String?  @db.Text  // Begruessung
+  questions      Json     @default("[]") // Array of questions with prompts
+  objections     Json     @default("[]") // Common objections and responses
+  closingNotes   String?  @db.Text  // Abschluss-Hinweise
+
+  // Status
+  isActive    Boolean @default(true)
+  isDefault   Boolean @default(false)
+
+  // Usage Stats
+  usageCount  Int     @default(0)
+  lastUsedAt  DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([userId, isActive])
+  @@map("call_scripts")
+}
+
+// ============================================
+// CRM PHASE 2: NOTE TEMPLATES
+// ============================================
+
+model NoteTemplate {
+  id          String  @id @default(cuid())
+  userId      String
+  name        String
+  description String?
+  category    String? // z.B. "Meeting-Notiz", "Anruf-Notiz", "Allgemein"
+
+  // Template Content
+  content     String  @db.Text  // Template text with placeholders
+  variables   Json    @default("[]") // Available variables
+
+  // Status
+  isActive    Boolean @default(true)
+
+  // Usage Stats
+  usageCount  Int     @default(0)
+  lastUsedAt  DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([userId, category])
+  @@map("note_templates")
+}
+
+// ============================================
+// CRM PHASE 2: EMAIL SYNC STATUS
+// ============================================
+
+model EmailSyncLog {
+  id             String   @id @default(cuid())
+  emailAccountId String
+
+  // Sync Info
+  status         String   // "running", "completed", "failed"
+  messagesFound  Int      @default(0)
+  messagesNew    Int      @default(0)
+
+  // Error
+  error          String?
+
+  // Timing
+  startedAt      DateTime @default(now())
+  completedAt    DateTime?
+
+  @@index([emailAccountId])
+  @@index([emailAccountId, startedAt])
+  @@map("email_sync_logs")
+}
+
+// ============================================
+// EMAIL MARKETING: CAMPAIGNS
+// ============================================
+
+enum CampaignStatus {
+  DRAFT
+  SCHEDULED
+  ACTIVE
+  PAUSED
+  COMPLETED
+  CANCELLED
+}
+
+enum RecipientStatus {
+  PENDING       // Noch nicht gestartet
+  ACTIVE        // In Sequence
+  COMPLETED     // Alle Steps durch
+  REPLIED       // Hat geantwortet
+  BOUNCED       // E-Mail unzustellbar
+  UNSUBSCRIBED  // Abgemeldet
+  PAUSED        // Manuell pausiert
+}
+
+model Campaign {
+  id             String         @id @default(cuid())
+  organizationId String
+  userId         String
+
+  // Basis-Info
+  name           String
+  description    String?
+  status         CampaignStatus @default(DRAFT)
+
+  // Zeitplan
+  scheduleStartAt   DateTime?      // Wann startet die Kampagne?
+  scheduleEndAt     DateTime?      // Wann endet sie?
+  sendingDays       String[]       @default(["MON", "TUE", "WED", "THU", "FRI"])
+  sendingHoursStart Int            @default(9)  // Ab 9 Uhr
+  sendingHoursEnd   Int            @default(17) // Bis 17 Uhr
+  timezone          String         @default("Europe/Berlin")
+
+  // E-Mail Konten (IDs für Rotation)
+  accountIds        String[]       @default([])
+
+  // Einstellungen
+  dailyLimit        Int            @default(100) // Max Mails pro Tag
+  sentTodayCount    Int            @default(0)   // Heute gesendet
+  stopOnReply       Boolean        @default(true)
+  stopOnBounce      Boolean        @default(true)
+  trackOpens        Boolean        @default(true)
+  trackClicks       Boolean        @default(true)
+
+  // Statistiken (cached)
+  recipientCount    Int            @default(0)
+  sentCount         Int            @default(0)
+  openCount         Int            @default(0)
+  clickCount        Int            @default(0)
+  replyCount        Int            @default(0)
+  bounceCount       Int            @default(0)
+
+  // Relations
+  organization      Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user              User           @relation(fields: [userId], references: [id])
+  sequences         CampaignSequence[]
+  recipients        CampaignRecipient[]
+  sentEmails        CampaignSentEmail[]
+
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  @@index([organizationId])
+  @@index([userId])
+  @@index([status])
+  @@index([organizationId, status])
+  @@map("campaigns")
+}
+
+model CampaignSequence {
+  id          String   @id @default(cuid())
+  campaignId  String
+
+  // Reihenfolge
+  stepNumber  Int                  // 1, 2, 3...
+
+  // Inhalt
+  subject     String               // Betreff (kann Spintax enthalten)
+  body        String   @db.Text    // HTML Body (Spintax + Variablen)
+
+  // Timing
+  delayDays   Int      @default(1) // Warte X Tage
+  delayHours  Int      @default(0) // + X Stunden
+
+  // A/B Varianten (optional)
+  variants    CampaignSequenceVariant[]
+
+  // Relation
+  campaign    Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  sentEmails  CampaignSentEmail[]
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([campaignId, stepNumber])
+  @@index([campaignId])
+  @@map("campaign_sequences")
+}
+
+model CampaignSequenceVariant {
+  id          String   @id @default(cuid())
+  sequenceId  String
+
+  name        String               // "Variante A", "Variante B"
+  subject     String
+  body        String   @db.Text
+  weight      Int      @default(50) // Prozent (alle zusammen = 100)
+
+  // Statistiken
+  sentCount   Int      @default(0)
+  openCount   Int      @default(0)
+  clickCount  Int      @default(0)
+  replyCount  Int      @default(0)
+
+  sequence    CampaignSequence @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
+  sentEmails  CampaignSentEmail[]
+
+  @@index([sequenceId])
+  @@map("campaign_sequence_variants")
+}
+
+model CampaignRecipient {
+  id          String          @id @default(cuid())
+  campaignId  String
+
+  // Kontaktdaten
+  email       String
+  firstName   String?
+  lastName    String?
+  company     String?
+
+  // Custom Variables (für Personalisierung)
+  variables   Json            @default("{}")
+
+  // Status
+  status      RecipientStatus @default(PENDING)
+  currentStep Int             @default(0)
+
+  // Timing
+  nextSendAt  DateTime?       // Wann kommt die nächste Mail?
+  startedAt   DateTime?       // Wann wurde gestartet?
+  completedAt DateTime?
+  repliedAt   DateTime?
+  bouncedAt   DateTime?
+
+  // Reply Analysis (KI-gestützt)
+  replyIntent     String?     // INTERESTED, NOT_INTERESTED, MEETING_REQUEST, OOO, QUESTION, UNSUBSCRIBE
+  replyConfidence Float?      // 0.0 - 1.0 Konfidenz der KI-Kategorisierung
+  replySummary    String?     // Kurze Zusammenfassung der Antwort
+  replyBody       String?  @db.Text  // Original Reply-Text für Unibox
+
+  // Unibox Status
+  isRead          Boolean     @default(false)  // Wurde in Unibox gelesen?
+  isStarred       Boolean     @default(false)  // Als wichtig markiert?
+  isArchived      Boolean     @default(false)  // Archiviert?
+  uniboxStatus    String?     // Custom Status: LEAD, MEETING_SCHEDULED, NEGOTIATION, WON, LOST
+  assignedTo      String?     // User ID des zugewiesenen Mitarbeiters
+  lastActivityAt  DateTime?   // Letzte Aktivität (Reply, Note, etc.)
+  notes           String?     @db.Text  // Interne Notizen
+
+  // Optional: Link zu LeadTool Row
+  rowId       String?
+
+  campaign    Campaign        @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  sentEmails  CampaignSentEmail[]
+  replies     CampaignReply[]  // Alle Antworten in der Konversation
+
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  @@unique([campaignId, email])
+  @@index([campaignId])
+  @@index([status])
+  @@index([nextSendAt])
+  @@index([campaignId, status])
+  @@index([replyIntent])
+  @@index([isRead, repliedAt])
+  @@index([isStarred])
+  @@index([lastActivityAt])
+  @@map("campaign_recipients")
+}
+
+// ============================================
+// CAMPAIGN REPLIES (Conversation Threading)
+// ============================================
+
+model CampaignReply {
+  id          String   @id @default(cuid())
+  recipientId String
+
+  // E-Mail Details
+  messageId   String?  @unique  // Message-ID Header
+  inReplyTo   String?           // In-Reply-To Header (verweist auf unser gesendetes E-Mail)
+  subject     String?
+  bodyText    String?  @db.Text
+  bodyHtml    String?  @db.Text
+
+  // Absender
+  fromEmail   String
+  fromName    String?
+
+  // Empfänger (unser Account)
+  toEmail     String
+  accountId   String?          // Welcher Account hat empfangen?
+
+  // KI-Analyse
+  intent      String?          // INTERESTED, NOT_INTERESTED, etc.
+  confidence  Float?
+  summary     String?
+
+  // Status
+  isRead      Boolean  @default(false)
+
+  // Source
+  source      String   @default("webhook")  // webhook, imap
+
+  // Timestamps
+  receivedAt  DateTime @default(now())
+
+  // Relations
+  recipient   CampaignRecipient @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+  account     EmailAccount?     @relation(fields: [accountId], references: [id])
+
+  createdAt   DateTime @default(now())
+
+  @@index([recipientId])
+  @@index([receivedAt])
+  @@index([isRead])
+  @@map("campaign_replies")
+}
+
+model CampaignSentEmail {
+  id            String   @id @default(cuid())
+
+  // Referenzen
+  campaignId    String
+  recipientId   String
+  accountId     String
+  sequenceId    String
+  variantId     String?          // Falls A/B Test
+
+  // E-Mail Details
+  subject       String
+  body          String   @db.Text
+  toEmail       String
+  fromEmail     String
+
+  // Tracking
+  trackingId    String   @unique @default(cuid())
+  messageId     String?  @unique  // SMTP Message-ID Header für Reply-Detection
+
+  // Timestamps
+  sentAt        DateTime @default(now())
+  openedAt      DateTime?        // Erste Öffnung
+  openCount     Int      @default(0) // Anzahl Öffnungen
+  clickedAt     DateTime?        // Erster Klick
+  clickCount    Int      @default(0)
+  repliedAt     DateTime?
+  bouncedAt     DateTime?
+  bounceReason  String?
+
+  // Status
+  status        String   @default("sent") // sent, opened, clicked, replied, bounced
+
+  // Relations
+  campaign      Campaign          @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  recipient     CampaignRecipient @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+  account       EmailAccount      @relation(fields: [accountId], references: [id])
+  sequence      CampaignSequence  @relation(fields: [sequenceId], references: [id])
+  variant       CampaignSequenceVariant? @relation(fields: [variantId], references: [id])
+  clicks        CampaignEmailClick[]
+
+  @@index([campaignId])
+  @@index([recipientId])
+  @@index([trackingId])
+  @@index([messageId])
+  @@index([sentAt])
+  @@index([accountId])
+  @@map("campaign_sent_emails")
+}
+
+model CampaignEmailClick {
+  id          String   @id @default(cuid())
+  sentEmailId String
+
+  url         String           // Original URL
+  clickedAt   DateTime @default(now())
+  userAgent   String?
+  ipAddress   String?
+
+  sentEmail   CampaignSentEmail @relation(fields: [sentEmailId], references: [id], onDelete: Cascade)
+
+  @@index([sentEmailId])
+  @@map("campaign_email_clicks")
+}
+
+// ============================================
+// INBOUND EMAIL SETTINGS (Webhook-based Reply Detection)
+// ============================================
+
+enum InboundEmailProvider {
+  MAILGUN
+  SENDGRID
+  POSTMARK
+  NONE  // Nur IMAP-Fallback
+}
+
+model InboundEmailSettings {
+  id               String                @id @default(cuid())
+  organizationId   String                @unique
+
+  // Provider Configuration
+  provider         InboundEmailProvider  @default(NONE)
+  isActive         Boolean               @default(false)
+  isVerified       Boolean               @default(false)
+
+  // Inbound Domain (z.B. reply.performanty.de)
+  inboundDomain    String?               // Domain für Reply-To Adresse
+
+  // Provider API Credentials (encrypted)
+  apiKey           String?               // Mailgun/SendGrid API Key
+  webhookSecret    String?               // Secret für Webhook-Signatur-Verifikation
+
+  // Mailgun-specific
+  mailgunRegion    String?               @default("EU") // EU oder US
+
+  // SendGrid-specific
+  sendgridApiKeyId String?               // SendGrid API Key ID für Verification
+
+  // Postmark-specific
+  postmarkServerId String?
+
+  // Webhook Endpoint Info
+  webhookUrl       String?               // Auto-generated Webhook URL
+  lastWebhookAt    DateTime?             // Letzter erfolgreicher Webhook
+
+  // Statistics
+  totalReceived    Int                   @default(0)
+  totalProcessed   Int                   @default(0)
+  totalFailed      Int                   @default(0)
+
+  // Verification
+  verifiedAt       DateTime?
+  verificationError String?
+
+  organization     Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  webhookLogs      InboundWebhookLog[]
+
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+
+  @@index([provider])
+  @@index([isActive])
+  @@map("inbound_email_settings")
+}
+
+model InboundWebhookLog {
+  id               String   @id @default(cuid())
+  settingsId       String
+
+  // Request Info
+  provider         String
+  eventType        String               // inbound, forward, reply
+
+  // Email Details
+  fromEmail        String?
+  toEmail          String?              // Reply-To Adresse
+  subject          String?
+
+  // Tracking ID extracted
+  trackingId       String?              // Extrahiert aus Reply-To
+
+  // Processing Status
+  status           String               // received, matched, processed, failed
+  matchedEmailId   String?              // CampaignSentEmail.id falls gematched
+
+  // AI Analysis Result
+  replyIntent      String?
+  replyConfidence  Float?
+
+  // Error Info
+  error            String?
+
+  // Raw Payload (für Debugging)
+  rawPayload       Json?                @default("{}")
+
+  settings         InboundEmailSettings @relation(fields: [settingsId], references: [id], onDelete: Cascade)
+
+  createdAt        DateTime             @default(now())
+
+  @@index([settingsId])
+  @@index([trackingId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("inbound_webhook_logs")
 }

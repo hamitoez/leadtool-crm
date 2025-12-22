@@ -1,8 +1,7 @@
-import * as Sentry from "@sentry/nextjs";
 import { NextRequest } from "next/server";
 
 /**
- * Capture an API error with additional context
+ * Capture an API error with additional context (stub - logs to console)
  */
 export function captureAPIError(
   error: unknown,
@@ -13,30 +12,17 @@ export function captureAPIError(
     extra?: Record<string, unknown>;
   }
 ) {
-  Sentry.withScope((scope) => {
-    if (context?.route) {
-      scope.setTag("api.route", context.route);
-    }
-    if (context?.method) {
-      scope.setTag("api.method", context.method);
-    }
-    if (context?.userId) {
-      scope.setUser({ id: context.userId });
-    }
-    if (context?.extra) {
-      scope.setExtras(context.extra);
-    }
-
-    if (error instanceof Error) {
-      Sentry.captureException(error);
-    } else {
-      Sentry.captureMessage(String(error), "error");
-    }
+  console.error("API Error:", {
+    error,
+    route: context?.route,
+    method: context?.method,
+    userId: context?.userId,
+    extra: context?.extra,
   });
 }
 
 /**
- * Capture an API error from a request object
+ * Capture an API error from a request object (stub - logs to console)
  */
 export function captureRequestError(
   error: unknown,
@@ -56,73 +42,60 @@ export function captureRequestError(
 }
 
 /**
- * Set user context for Sentry
+ * Set user context (stub - no-op)
  */
 export function setUserContext(user: {
   id: string;
   email?: string;
   name?: string;
 }) {
-  Sentry.setUser({
-    id: user.id,
-    email: user.email,
-    username: user.name,
-  });
+  // No-op stub
 }
 
 /**
- * Clear user context (on logout)
+ * Clear user context (stub - no-op)
  */
 export function clearUserContext() {
-  Sentry.setUser(null);
+  // No-op stub
 }
 
 /**
- * Add breadcrumb for tracking user actions
+ * Add breadcrumb for tracking user actions (stub - no-op)
  */
 export function addBreadcrumb(
   message: string,
   category: string,
   data?: Record<string, unknown>,
-  level: Sentry.SeverityLevel = "info"
+  level: "info" | "warning" | "error" = "info"
 ) {
-  Sentry.addBreadcrumb({
-    message,
-    category,
-    data,
-    level,
-    timestamp: Date.now() / 1000,
-  });
+  // No-op stub
 }
 
 /**
- * Track a custom event
+ * Track a custom event (stub - no-op)
  */
 export function trackEvent(
   name: string,
   data?: Record<string, unknown>
 ) {
-  Sentry.captureMessage(name, {
-    level: "info",
-    extra: data,
-  });
+  // No-op stub
 }
 
 /**
- * Start a performance transaction
+ * Start a performance transaction (stub - returns mock)
  */
 export function startTransaction(
   name: string,
   op: string
 ) {
-  return Sentry.startInactiveSpan({
-    name,
-    op,
-  });
+  return {
+    finish: () => {},
+    setStatus: () => {},
+  };
 }
 
 /**
- * Wrapper for API route handlers with error tracking
+ * Wrapper for API route handlers with error tracking (stub - just passes through)
  */
 export function withSentryAPI<T>(
   handler: (request: NextRequest, context?: T) => Promise<Response>,
